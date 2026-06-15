@@ -181,10 +181,17 @@ def fts_search(query: str, source_types: set[str], limit: int) -> list[tuple[str
 # ---------- 벡터 검색 ----------
 @lru_cache(maxsize=1)
 def _numpy_matrix():
-    """numpy 폴백용 임베딩 행렬 로드 (sqlite-vec 없을 때). content 포함(스니펫용)."""
+    """numpy 폴백용 임베딩 행렬 로드 (sqlite-vec 없을 때). content 포함(스니펫용).
+
+    배포용 슬림 DB는 chunks.embedding BLOB을 제거(sqlite-vec만 사용)하므로,
+    컬럼이 없으면 폴백 불가 → None 반환(검색은 sqlite-vec 또는 FTS로 동작).
+    """
     import numpy as np
 
     conn = db()
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(chunks)")}
+    if "embedding" not in cols:
+        return None
     ids, types, conts, vecs = [], [], [], []
     for r in conn.execute("SELECT source_type, source_id, content, embedding FROM chunks"):
         if r["embedding"] is None:
