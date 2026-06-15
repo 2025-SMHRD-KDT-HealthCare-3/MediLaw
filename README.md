@@ -35,10 +35,10 @@ npm run dev
 
 - `master`  : 배포 가능한 안정 버전
 - `develop` : 통합 개발 브랜치 (기능 브랜치의 베이스)
-- `feature/<이름>` : 개인/기능 작업 브랜치 → `develop` 으로 PR
+- `b` : 개인/기능 작업 브랜치 → `develop` 으로 PR
 
 예) 프론트 담당:
 ```bash
 git checkout develop
-git checkout -b feature/frontend-chat
+git checkout -b front
 ```
