@@ -4,6 +4,7 @@ from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.utils.datetime import utc_now
 
 
 class AiAdCopy(Base):
@@ -20,6 +21,6 @@ class AiAdCopy(Base):
     legal_basis: Mapped[str | None] = mapped_column(Text)
     revision_recomm: Mapped[str | None] = mapped_column(Text)
     alternative_text: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
     user = relationship("User", back_populates="ai_ad_copies")

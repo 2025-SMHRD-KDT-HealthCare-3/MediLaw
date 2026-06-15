@@ -5,10 +5,10 @@ from app.models.summary import Summary
 from app.schemas.summary_schema import SummaryCreate, SummaryUpdate
 
 
-def create(db: Session, room_id: int, data: SummaryCreate) -> Summary:
-    summary = Summary(**data.model_dump(), room_id=room_id)
+def create(db: Session, room_id: int, admin_id: int, data: SummaryCreate) -> Summary:
+    summary = Summary(**data.model_dump(), room_id=room_id, admin_id=admin_id)
     db.add(summary)
-    db.commit()
+    db.flush()
     db.refresh(summary)
     return summary
 
@@ -28,6 +28,6 @@ def get_list(db: Session, room_id: int | None = None, skip: int = 0, limit: int 
 def update(db: Session, summary: Summary, data: SummaryUpdate) -> Summary:
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(summary, key, value)
-    db.commit()
+    db.flush()
     db.refresh(summary)
     return summary

@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.dependencies import get_current_user_id
+from app.core.dependencies import get_current_user
 from app.core.response import success_response
+from app.models.user import User
 from app.schemas.chat_schema import ChatResponse
 from app.schemas.evidence_schema import EvidenceResponse
 from app.schemas.verification_schema import VerificationResponse
@@ -15,7 +16,12 @@ router = APIRouter(prefix="/rooms/{room_id}", tags=["ai-answer"])
 
 
 class AiAnswerRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1, max_length=5000)
+
+    @field_validator("question", mode="before")
+    @classmethod
+    def strip_question(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
 
 
 @router.post("/ai-answer")
@@ -23,9 +29,9 @@ def create_ai_answer(
     room_id: int,
     data: AiAnswerRequest,
     db: Session = Depends(get_db),
-    current_user_id: int = Depends(get_current_user_id),
+    current_user: User = Depends(get_current_user),
 ):
-    result = ai_answer_service.create_ai_answer(db, room_id, current_user_id, data.question)
+    result = ai_answer_service.create_ai_answer(db, room_id, current_user, data.question)
     payload = {
         "question_chat": ChatResponse.model_validate(result["question_chat"]),
         "answer_chat": ChatResponse.model_validate(result["answer_chat"]),

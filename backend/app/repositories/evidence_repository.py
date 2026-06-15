@@ -8,7 +8,7 @@ from app.schemas.evidence_schema import EvidenceCreate, EvidenceUpdate
 def create(db: Session, data: EvidenceCreate) -> Evidence:
     evidence = Evidence(**data.model_dump())
     db.add(evidence)
-    db.commit()
+    db.flush()
     db.refresh(evidence)
     return evidence
 
@@ -28,6 +28,6 @@ def get_list(db: Session, ans_id: int | None = None, skip: int = 0, limit: int =
 def update(db: Session, evidence: Evidence, data: EvidenceUpdate) -> Evidence:
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(evidence, key, value)
-    db.commit()
+    db.flush()
     db.refresh(evidence)
     return evidence

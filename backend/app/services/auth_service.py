@@ -8,13 +8,24 @@ from app.schemas.user_schema import UserCreate
 
 
 def signup(db: Session, data: SignupRequest):
+    """Create a user with hashed password after duplicate checks."""
     if user_repository.get_by_login_id(db, data.login_id):
         raise BadRequestError("login_id already exists")
+    if data.email and user_repository.get_by_email(db, data.email):
+        raise BadRequestError("email already exists")
     user_data = UserCreate(**data.model_dump())
-    return user_repository.create(db, user_data, get_password_hash(data.password))
+    try:
+        user = user_repository.create(db, user_data, get_password_hash(data.password))
+        db.commit()
+        db.refresh(user)
+        return user
+    except Exception:
+        db.rollback()
+        raise
 
 
 def login(db: Session, data: LoginRequest) -> TokenResponse:
+    """Validate credentials and issue an access token."""
     user = user_repository.get_by_login_id(db, data.login_id)
     if not user or not verify_password(data.password, user.password_hash):
         raise UnauthorizedError("invalid login_id or password")

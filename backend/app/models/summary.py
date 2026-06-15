@@ -4,6 +4,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.utils.datetime import utc_now
 
 
 class Summary(Base):
@@ -18,7 +19,7 @@ class Summary(Base):
     # summary_file은 파일 원본이 아니라 파일명 또는 파일 참조 경로만 저장한다.
     summary_file: Mapped[str | None] = mapped_column(String(255))
     is_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
     room = relationship("Room", back_populates="summaries")
     admin = relationship("User", back_populates="summaries")

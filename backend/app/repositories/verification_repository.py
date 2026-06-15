@@ -8,7 +8,7 @@ from app.schemas.verification_schema import VerificationCreate, VerificationUpda
 def create(db: Session, data: VerificationCreate) -> Verification:
     verification = Verification(**data.model_dump())
     db.add(verification)
-    db.commit()
+    db.flush()
     db.refresh(verification)
     return verification
 
@@ -33,6 +33,6 @@ def get_list(
 def update(db: Session, verification: Verification, data: VerificationUpdate) -> Verification:
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(verification, key, value)
-    db.commit()
+    db.flush()
     db.refresh(verification)
     return verification

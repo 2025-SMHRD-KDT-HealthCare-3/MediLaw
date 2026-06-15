@@ -8,7 +8,7 @@ from app.schemas.room_schema import RoomCreate, RoomUpdate
 def create(db: Session, user_id: int, data: RoomCreate) -> Room:
     room = Room(**data.model_dump(), user_id=user_id)
     db.add(room)
-    db.commit()
+    db.flush()
     db.refresh(room)
     return room
 
@@ -28,6 +28,6 @@ def get_list(db: Session, user_id: int | None = None, skip: int = 0, limit: int 
 def update(db: Session, room: Room, data: RoomUpdate) -> Room:
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(room, key, value)
-    db.commit()
+    db.flush()
     db.refresh(room)
     return room

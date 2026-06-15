@@ -14,8 +14,21 @@ def get_me(db: Session, user_id: int):
 
 def update_me(db: Session, user_id: int, data: UserUpdate):
     user = get_me(db, user_id)
-    return user_repository.update(db, user, data)
+    if data.email and data.email != user.email:
+        existing = user_repository.get_by_email(db, data.email)
+        if existing and existing.user_id != user.user_id:
+            from app.core.exceptions import BadRequestError
+
+            raise BadRequestError("email already exists")
+    try:
+        updated = user_repository.update(db, user, data)
+        db.commit()
+        db.refresh(updated)
+        return updated
+    except Exception:
+        db.rollback()
+        raise
 
 
-def list_users(db: Session):
-    return user_repository.get_list(db)
+def list_users(db: Session, skip: int = 0, limit: int = 100):
+    return user_repository.get_list(db, skip=skip, limit=limit)

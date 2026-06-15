@@ -1,12 +1,17 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class AiAdCopyCreate(BaseModel):
-    user_id: int
-    input_language: str | None = Field(default=None, max_length=10)
-    input_text: str
+    input_language: Literal["ko", "en"] = "ko"
+    input_text: str = Field(min_length=1, max_length=5000)
+
+    @field_validator("input_text", mode="before")
+    @classmethod
+    def strip_input_text(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
 
 
 class AiAdCopyUpdate(BaseModel):

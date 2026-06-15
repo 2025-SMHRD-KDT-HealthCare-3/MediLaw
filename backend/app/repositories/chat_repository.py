@@ -8,7 +8,7 @@ from app.schemas.chat_schema import ChatCreate, ChatUpdate
 def create(db: Session, room_id: int, data: ChatCreate) -> Chat:
     chat = Chat(**data.model_dump(), room_id=room_id)
     db.add(chat)
-    db.commit()
+    db.flush()
     db.refresh(chat)
     return chat
 
@@ -28,6 +28,6 @@ def get_list(db: Session, room_id: int | None = None, skip: int = 0, limit: int 
 def update(db: Session, chat: Chat, data: ChatUpdate) -> Chat:
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(chat, key, value)
-    db.commit()
+    db.flush()
     db.refresh(chat)
     return chat

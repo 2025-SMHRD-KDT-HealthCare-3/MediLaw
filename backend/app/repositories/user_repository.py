@@ -9,7 +9,7 @@ def create(db: Session, data: UserCreate, password_hash: str) -> User:
     payload = data.model_dump(exclude={"password"})
     user = User(**payload, password_hash=password_hash)
     db.add(user)
-    db.commit()
+    db.flush()
     db.refresh(user)
     return user
 
@@ -22,6 +22,10 @@ def get_by_login_id(db: Session, login_id: str) -> User | None:
     return db.scalar(select(User).where(User.login_id == login_id))
 
 
+def get_by_email(db: Session, email: str) -> User | None:
+    return db.scalar(select(User).where(User.email == email))
+
+
 def get_list(db: Session, skip: int = 0, limit: int = 100) -> list[User]:
     # TODO: add filtering and pagination policy.
     return list(db.scalars(select(User).offset(skip).limit(limit)).all())
@@ -30,6 +34,6 @@ def get_list(db: Session, skip: int = 0, limit: int = 100) -> list[User]:
 def update(db: Session, user: User, data: UserUpdate) -> User:
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(user, key, value)
-    db.commit()
+    db.flush()
     db.refresh(user)
     return user

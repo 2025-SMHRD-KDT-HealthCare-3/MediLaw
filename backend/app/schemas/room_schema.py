@@ -1,20 +1,33 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+RoomStatus = Literal["ACTIVE", "CLOSED"]
 
 
 class RoomCreate(BaseModel):
-    room_title: str = Field(max_length=255)
-    room_desc: str | None = None
-    room_limit: int | None = None
-    room_status: str = Field(default="OPEN", max_length=10)
+    room_title: str = Field(min_length=1, max_length=255)
+    room_desc: str | None = Field(default=None, max_length=2000)
+    room_limit: int | None = Field(default=None, ge=1, le=100)
+    room_status: RoomStatus = "ACTIVE"
+
+    @field_validator("room_title", mode="before")
+    @classmethod
+    def strip_title(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
 
 
 class RoomUpdate(BaseModel):
-    room_title: str | None = Field(default=None, max_length=255)
-    room_desc: str | None = None
-    room_limit: int | None = None
-    room_status: str | None = Field(default=None, max_length=10)
+    room_title: str | None = Field(default=None, min_length=1, max_length=255)
+    room_desc: str | None = Field(default=None, max_length=2000)
+    room_limit: int | None = Field(default=None, ge=1, le=100)
+    room_status: RoomStatus | None = None
+
+    @field_validator("room_title", mode="before")
+    @classmethod
+    def strip_title(cls, value: str | None) -> str | None:
+        return value.strip() if isinstance(value, str) else value
 
 
 class RoomResponse(BaseModel):

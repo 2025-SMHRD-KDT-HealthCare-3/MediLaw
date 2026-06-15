@@ -12,3 +12,4 @@ alembic
 pytest
 httpx
 python-multipart
+openai

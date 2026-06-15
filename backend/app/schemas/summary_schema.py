@@ -1,20 +1,41 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.utils.validators import validate_file_reference
 
 
 class SummaryCreate(BaseModel):
-    admin_id: int
-    summary: str | None = None
-    checklist_item: str | None = None
+    summary: str | None = Field(default=None, min_length=1, max_length=10000)
+    checklist_item: str | None = Field(default=None, min_length=1, max_length=10000)
     summary_file: str | None = Field(default=None, max_length=255)
+
+    @field_validator("summary", "checklist_item", mode="before")
+    @classmethod
+    def strip_text(cls, value: str | None) -> str | None:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("summary_file")
+    @classmethod
+    def validate_summary_file(cls, value: str | None) -> str | None:
+        return validate_file_reference(value) if value else value
 
 
 class SummaryUpdate(BaseModel):
-    summary: str | None = None
-    checklist_item: str | None = None
+    summary: str | None = Field(default=None, min_length=1, max_length=10000)
+    checklist_item: str | None = Field(default=None, min_length=1, max_length=10000)
     summary_file: str | None = Field(default=None, max_length=255)
     is_confirmed: bool | None = None
+
+    @field_validator("summary", "checklist_item", mode="before")
+    @classmethod
+    def strip_text(cls, value: str | None) -> str | None:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("summary_file")
+    @classmethod
+    def validate_summary_file(cls, value: str | None) -> str | None:
+        return validate_file_reference(value) if value else value
 
 
 class SummaryResponse(BaseModel):

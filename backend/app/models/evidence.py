@@ -4,6 +4,7 @@ from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.utils.datetime import utc_now
 
 
 class Evidence(Base):
@@ -14,9 +15,9 @@ class Evidence(Base):
     ans_id: Mapped[int] = mapped_column(ForeignKey("tb_chat.chat_id"), nullable=False)
     law_name: Mapped[str | None] = mapped_column(String(255))
     article_no: Mapped[str | None] = mapped_column(String(100))
-    # 법령 원문 전체를 저장하지 않고 핵심 근거 요약만 저장한다.
+    # 법령 원문 전체를 저장하지 않고, 답변에 사용된 핵심 근거 요약만 저장한다.
     core_basis: Mapped[str | None] = mapped_column(Text)
     source_url: Mapped[str | None] = mapped_column(String(2048))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
     answer_chat = relationship("Chat", back_populates="evidences")

@@ -1,13 +1,17 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import CheckConstraint, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.utils.datetime import utc_now
 
 
 class User(Base):
     __tablename__ = "tb_user"
+    __table_args__ = (
+        CheckConstraint("role in ('USER', 'ADMIN')", name="ck_user_role"),
+    )
 
     user_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     login_id: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
@@ -16,9 +20,9 @@ class User(Base):
     phone_number: Mapped[str | None] = mapped_column(String(20))
     email: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
     role: Mapped[str] = mapped_column(String(20), default="USER", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+        DateTime, default=utc_now, onupdate=utc_now, nullable=False
     )
 
     rooms = relationship("Room", back_populates="user")

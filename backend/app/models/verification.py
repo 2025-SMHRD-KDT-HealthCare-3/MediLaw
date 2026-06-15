@@ -5,6 +5,7 @@ from sqlalchemy import Boolean, CheckConstraint, DateTime, DECIMAL, ForeignKey, 
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.utils.datetime import utc_now
 
 
 class Verification(Base):
@@ -32,7 +33,7 @@ class Verification(Base):
     verification_status: Mapped[str] = mapped_column(String(20), nullable=False)
     confidence_score: Mapped[Decimal | None] = mapped_column(DECIMAL(5, 2))
     verification_reason: Mapped[str | None] = mapped_column(Text)
-    verified_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
     answer_chat = relationship("Chat", back_populates="verifications")
     user = relationship("User", back_populates="verifications")
