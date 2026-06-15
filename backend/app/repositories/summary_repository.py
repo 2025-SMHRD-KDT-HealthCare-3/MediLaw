@@ -1,0 +1,33 @@
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.summary import Summary
+from app.schemas.summary_schema import SummaryCreate, SummaryUpdate
+
+
+def create(db: Session, room_id: int, data: SummaryCreate) -> Summary:
+    summary = Summary(**data.model_dump(), room_id=room_id)
+    db.add(summary)
+    db.commit()
+    db.refresh(summary)
+    return summary
+
+
+def get_by_id(db: Session, summary_id: int) -> Summary | None:
+    return db.get(Summary, summary_id)
+
+
+def get_list(db: Session, room_id: int | None = None, skip: int = 0, limit: int = 100) -> list[Summary]:
+    # TODO: add admin and confirmation status filters.
+    stmt = select(Summary).order_by(Summary.created_at.desc())
+    if room_id is not None:
+        stmt = stmt.where(Summary.room_id == room_id)
+    return list(db.scalars(stmt.offset(skip).limit(limit)).all())
+
+
+def update(db: Session, summary: Summary, data: SummaryUpdate) -> Summary:
+    for key, value in data.model_dump(exclude_unset=True).items():
+        setattr(summary, key, value)
+    db.commit()
+    db.refresh(summary)
+    return summary

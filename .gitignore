@@ -15,6 +15,16 @@ build/
 npm-debug.log*
 yarn-error.log*
 
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/pytest-cache-files-*/
+
+# uploaded/runtime files
+backend/storage/uploads/*
+!backend/storage/uploads/.gitkeep
+
 # editor / OS
 .DS_Store
 Thumbs.db
