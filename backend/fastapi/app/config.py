@@ -18,6 +18,9 @@ EMBED_DIM = int(os.environ.get("EMBED_DIM", "512"))
 # 생성 LLM (챗봇·PDF). OpenAI gpt-5.5 (2026-04). 스냅샷 고정 원하면 gpt-5.5-2026-04-23.
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "gpt-5.5")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+# 추론 강도(gpt-5계열). "low"면 완답 시간 약 절반(품질은 근거기반이라 충분).
+# 빈 문자열이면 미전달(모델 기본). 값: minimal(미지원)|low|medium|high.
+REASONING_EFFORT = os.environ.get("REASONING_EFFORT", "low")
 
 # 하이브리드 검색 RRF 상수
 RRF_K = 60

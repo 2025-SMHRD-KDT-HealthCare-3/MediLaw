@@ -2,7 +2,7 @@
 import json
 from collections.abc import Iterator
 
-from app.config import CHAT_MODEL, OPENAI_API_KEY
+from app.config import CHAT_MODEL, OPENAI_API_KEY, REASONING_EFFORT
 
 
 class LLMUnavailable(RuntimeError):
@@ -17,9 +17,13 @@ def _client():
     return OpenAI(api_key=OPENAI_API_KEY)
 
 
+# 모든 생성 호출 공통 옵션 — 추론 강도 낮춰 지연 단축(REASONING_EFFORT 빈값이면 미전달).
+_GEN_OPTS = {"reasoning_effort": REASONING_EFFORT} if REASONING_EFFORT else {}
+
+
 def chat(messages: list[dict]) -> str:
     """단발 생성. 답변 텍스트 반환."""
-    resp = _client().chat.completions.create(model=CHAT_MODEL, messages=messages)
+    resp = _client().chat.completions.create(model=CHAT_MODEL, messages=messages, **_GEN_OPTS)
     return resp.choices[0].message.content or ""
 
 
@@ -31,7 +35,7 @@ def chat_json(messages: list[dict]) -> dict:
     """
     resp = _client().chat.completions.create(
         model=CHAT_MODEL, messages=messages,
-        response_format={"type": "json_object"},
+        response_format={"type": "json_object"}, **_GEN_OPTS,
     )
     content = resp.choices[0].message.content or "{}"
     try:
@@ -52,6 +56,7 @@ def translate(text: str, target: str = "ko") -> str:
                     f"Output only the translation, no quotes or explanation."},
                 {"role": "user", "content": text},
             ],
+            **_GEN_OPTS,
         )
         return (resp.choices[0].message.content or "").strip() or text
     except LLMUnavailable:
@@ -78,6 +83,7 @@ def rewrite_query(history: list[dict], question: str) -> str:
                     "Output only the query, no explanation."},
                 {"role": "user", "content": f"{convo}\n\nfollow-up: {question}"},
             ],
+            **_GEN_OPTS,
         )
         return (resp.choices[0].message.content or "").strip() or question
     except LLMUnavailable:
@@ -99,6 +105,7 @@ def ocr_image(b64_png: str) -> str:
             {"type": "image_url",
              "image_url": {"url": f"data:image/png;base64,{b64_png}"}},
         ]}],
+        **_GEN_OPTS,
     )
     return resp.choices[0].message.content or ""
 
@@ -106,7 +113,7 @@ def ocr_image(b64_png: str) -> str:
 def chat_stream(messages: list[dict]) -> Iterator[str]:
     """토큰 스트리밍 (delta 텍스트만 yield)."""
     stream = _client().chat.completions.create(
-        model=CHAT_MODEL, messages=messages, stream=True
+        model=CHAT_MODEL, messages=messages, stream=True, **_GEN_OPTS
     )
     for chunk in stream:
         if not chunk.choices:
