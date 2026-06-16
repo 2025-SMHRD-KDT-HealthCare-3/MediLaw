@@ -40,6 +40,24 @@ def chat_json(messages: list[dict]) -> dict:
         raise LLMUnavailable(f"LLM JSON 파싱 실패: {e}") from e
 
 
+def translate(text: str, target: str = "ko") -> str:
+    """짧은 번역(검색어 EN→KO 등). 실패 시 원문 그대로 반환(degradation)."""
+    lang = "Korean" if target == "ko" else "English"
+    try:
+        resp = _client().chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[
+                {"role": "system", "content":
+                    f"Translate the user's text into {lang}. "
+                    f"Output only the translation, no quotes or explanation."},
+                {"role": "user", "content": text},
+            ],
+        )
+        return (resp.choices[0].message.content or "").strip() or text
+    except LLMUnavailable:
+        return text
+
+
 def ocr_image(b64_png: str) -> str:
     """비전 모델로 이미지(base64 PNG)에서 한국어 텍스트 추출.
 

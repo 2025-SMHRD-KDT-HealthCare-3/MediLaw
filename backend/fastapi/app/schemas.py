@@ -97,11 +97,15 @@ class VerifyResponse(BaseModel):
 
 
 # ---------- /chat (AI 질의응답 챗봇) ----------
+Lang = Literal["auto", "ko", "en"]
+
+
 class ChatRequest(BaseModel):
     question: str
     top_k: int = Field(8, ge=1, le=20)
     source_types: Optional[list[SourceType]] = None
     as_of: Optional[str] = None
+    lang: Lang = Field("auto", description="응답 언어. auto=질문 언어 자동감지")
 
 
 class ChatSource(BaseModel):
@@ -112,6 +116,10 @@ class ChatSource(BaseModel):
     snippet: str = ""
     source_url: str = ""
     trust_grade: str = ""
+    # 영어 응답용 — 법령은 공식 영문(elaw), 그 외는 비어있음(LLM 비공식 번역)
+    label_en: str = Field("", description="공식 영문 라벨(법령만)")
+    snippet_en: str = Field("", description="공식 영문 조문(법령만)")
+    is_official_en: bool = Field(False, description="공식 영문 출처 여부(법령 True)")
 
 
 class ChatResponse(BaseModel):
@@ -119,6 +127,7 @@ class ChatResponse(BaseModel):
     sources: list[ChatSource]
     citation_check: VerifyResponse = Field(description="답변 인용의 Citation Firewall 검증")
     method: str = "hybrid"
+    lang: str = Field("ko", description="실제 응답 언어")
     as_of: Optional[str] = None
 
 
@@ -147,4 +156,5 @@ class ReviewResponse(BaseModel):
     extracted_by: Literal["text", "ocr"] = Field("text", description="원문 추출 방식")
     citation_check: VerifyResponse = Field(description="findings 인용의 Citation Firewall 검증")
     method: str = "hybrid"
+    lang: str = Field("ko", description="실제 응답 언어")
     as_of: Optional[str] = None

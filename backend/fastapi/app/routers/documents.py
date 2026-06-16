@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from app import llm
 from app.auth import require_api_key
 from app.citations import extract_and_verify
+from app.english import detect_lang, english_article
 from app.rag import hybrid_search
 from app.schemas import (
     ChatSource,
@@ -46,6 +47,23 @@ SYSTEM_PROMPT = (
     "한국어로 쓰세요(‘~하세요’ 같은 지시·설명·따옴표 없이 광고/문서에 바로 넣을 문장 자체).\n"
     "5. risk_level 은 high/medium/low 중 하나.\n"
     '6. 반드시 다음 JSON 형식으로만 응답: '
+    '{"findings":[{"segment_index":0,"risk_level":"high","issue":"...","suggestion":"...","citations":[1,2]}]}'
+)
+
+SYSTEM_PROMPT_EN = (
+    "You review a Korean healthcare business document (ad copy, patient consent form, terms) for "
+    "compliance risk under Korean law (Medical Service Act, Personal Information Protection Act, "
+    "Bioethics and Safety Act, Network Act) and related precedents/interpretations/guidelines.\n"
+    "[Segments] are numbered document fragments; [Sources] are numbered statutes/precedents/guidelines.\n"
+    "Rules:\n"
+    "1. Report only segments that are violating, exaggerated, or misleading (omit clean ones).\n"
+    "2. Base judgments ONLY on [Sources]. No speculation.\n"
+    "3. In citations put only the [Source] numbers used, as an integer array.\n"
+    "4. 'issue' explains the risk. 'suggestion' is the actual replacement text to drop into the "
+    "document (the sentence itself, in the document's language — no instructions or quotes).\n"
+    "   Sources marked '(official English)' are official statute translations; cite their names exactly.\n"
+    "5. risk_level is one of high/medium/low.\n"
+    '6. Respond ONLY in this JSON format: '
     '{"findings":[{"segment_index":0,"risk_level":"high","issue":"...","suggestion":"...","citations":[1,2]}]}'
 )
 
@@ -105,22 +123,33 @@ def _segment(text: str) -> list[str]:
     return segs[:MAX_SEGMENTS]
 
 
-def _gather_evidence(segments: list[str], top_k: int, as_of):
-    """세그먼트별 검색 → (전역번호 ChatSource 목록, n→source 맵, method)."""
+def _gather_evidence(segments: list[str], top_k: int, as_of, lang: str = "ko"):
+    """세그먼트별 검색 → (전역번호 ChatSource 목록, n→source 맵, method).
+
+    lang=='en' 이면 검색용으로 세그먼트를 한국어 번역, 법령엔 공식 영문 부착.
+    """
     by_key: dict[tuple[str, int], ChatSource] = {}
     method = "fts"
     for seg in segments:
-        hits, m = hybrid_search(seg, None, top_k=top_k, as_of=as_of)
+        search_seg = llm.translate(seg, "ko") if lang == "en" else seg
+        hits, m = hybrid_search(search_seg, None, top_k=top_k, as_of=as_of)
         if m == "hybrid":
             method = "hybrid"
         for h in hits:
             key = (h.source_type, h.source_id)
             if key not in by_key:
-                by_key[key] = ChatSource(
+                s = ChatSource(
                     n=len(by_key) + 1, label=h.label, source_type=h.source_type,
                     source_id=h.source_id, snippet=h.snippet,
                     source_url=h.source_url, trust_grade=h.trust_grade,
                 )
+                if lang == "en" and h.source_type == "statute":
+                    en = english_article(h.source_id)
+                    if en:
+                        s.label_en = f"{en['law_name_en']} Article {en['article_no']}"
+                        s.snippet_en = en["body_en"]
+                        s.is_official_en = True
+                by_key[key] = s
     sources = list(by_key.values())
     return sources, {s.n: s for s in sources}, method
 
@@ -135,24 +164,37 @@ def _citation_check(text: str, as_of) -> VerifyResponse:
     )
 
 
-def _review(text: str, as_of, top_k: int, extracted_by: str = "text") -> ReviewResponse:
+def _review(text: str, as_of, top_k: int, extracted_by: str = "text", lang: str = "auto") -> ReviewResponse:
     segments = _segment(text)
     if not segments:
         raise HTTPException(400, "문서에서 검토할 텍스트를 추출하지 못했습니다(이미지 OCR도 비었음).")
+    if lang not in ("ko", "en"):
+        lang = detect_lang(text)
 
-    sources, by_n, method = _gather_evidence(segments, top_k, as_of)
+    sources, by_n, method = _gather_evidence(segments, top_k, as_of, lang)
     if not sources:
         return ReviewResponse(original_text=text, revised_text=text,
                               segments=segments, findings=[], extracted_by=extracted_by,
                               citation_check=_citation_check("", as_of),
-                              method=method, as_of=as_of)
+                              method=method, lang=lang, as_of=as_of)
 
     seg_block = "\n".join(f"[{i}] {s}" for i, s in enumerate(segments))
-    ev_block = "\n\n".join(f"[{s.n}] {s.label}\n{s.snippet}" for s in sources)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"[세그먼트]\n{seg_block}\n\n[근거]\n{ev_block}"},
-    ]
+    if lang == "en":
+        ev_block = "\n\n".join(
+            f"[{s.n}] {s.label_en} (official English)\n{s.snippet_en}" if s.is_official_en
+            else f"[{s.n}] {s.label} (Korean source)\n{s.snippet}"
+            for s in sources
+        )
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT_EN},
+            {"role": "user", "content": f"[Segments]\n{seg_block}\n\n[Sources]\n{ev_block}"},
+        ]
+    else:
+        ev_block = "\n\n".join(f"[{s.n}] {s.label}\n{s.snippet}" for s in sources)
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"[세그먼트]\n{seg_block}\n\n[근거]\n{ev_block}"},
+        ]
     try:
         data = llm.chat_json(messages)
     except llm.LLMUnavailable as e:
@@ -186,7 +228,7 @@ def _review(text: str, as_of, top_k: int, extracted_by: str = "text") -> ReviewR
     return ReviewResponse(original_text=text, revised_text=revised,
                           segments=segments, findings=findings, extracted_by=extracted_by,
                           citation_check=_citation_check(audit, as_of),
-                          method=method, as_of=as_of)
+                          method=method, lang=lang, as_of=as_of)
 
 
 @router.post("/review", response_model=ReviewResponse, dependencies=[Depends(require_api_key)])
@@ -195,6 +237,7 @@ async def review(
     text: str | None = Form(default=None, description="PDF 대신 직접 입력하는 본문"),
     as_of: str | None = Form(default=None),
     top_k_per_segment: int = Form(default=4),
+    lang: str = Form(default="auto", description="응답 언어 auto|ko|en"),
 ):
     """PDF 업로드(file) 또는 텍스트(text) 중 하나로 문서 위험을 검토한다."""
     if file is not None:
@@ -205,4 +248,4 @@ async def review(
     else:
         raise HTTPException(400, "file(PDF) 또는 text 중 하나를 제공하세요.")
     top_k = max(1, min(8, top_k_per_segment))
-    return _review(body, as_of, top_k, extracted_by)
+    return _review(body, as_of, top_k, extracted_by, lang)
