@@ -25,6 +25,8 @@ from app.schemas import (
 
 router = APIRouter(prefix="", tags=["AI 챗봇"])
 
+MAX_HISTORY = 10  # 토큰 방어 — 최근 N턴만 LLM에 전달
+
 SYSTEM_PROMPT = (
     "당신은 한국 의료·헬스케어 사업자를 위한 의료법 컴플라이언스 도우미입니다. "
     "의료법·개인정보보호법·생명윤리법·정보통신망법 및 관련 판례·해석례·가이드라인을 근거로 답합니다.\n"
@@ -87,16 +89,15 @@ def _build(req: ChatRequest):
                 parts.append(f"[{s.n}] {s.label_en} (official English)\n{s.snippet_en}")
             else:
                 parts.append(f"[{s.n}] {s.label} (Korean source)\n{s.snippet}")
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT_EN},
-            {"role": "user", "content": f"Question: {req.question}\n\n[Sources]\n" + "\n\n".join(parts)},
-        ]
+        system, user = SYSTEM_PROMPT_EN, f"Question: {req.question}\n\n[Sources]\n" + "\n\n".join(parts)
     else:
         context = "\n\n".join(f"[{s.n}] {s.label}\n{s.snippet}" for s in sources)
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"질문: {req.question}\n\n[근거]\n{context}"},
-        ]
+        system, user = SYSTEM_PROMPT, f"질문: {req.question}\n\n[근거]\n{context}"
+
+    # 멀티턴: system → 이전 대화(최근 MAX_HISTORY턴) → 현재 질문+근거
+    messages = [{"role": "system", "content": system}]
+    messages += [{"role": t.role, "content": t.content} for t in req.history[-MAX_HISTORY:]]
+    messages.append({"role": "user", "content": user})
     return messages, sources, method, lang
 
 

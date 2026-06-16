@@ -14,6 +14,8 @@
 - [x] **AI 챗봇** `POST /chat`(+SSE) — gpt-5.5 RAG + Citation Firewall 검증
 - [x] **능동형 PDF 에디터** `POST /documents/review` — 위험 탐지 + before/after 수정안, 스캔본 **비전 OCR** fallback
 - [x] **영어 입력 지원** `lang=en` — 법령은 **공식 영문**(법제처 elaw API), 판례·해석례·가이드라인은 비공식 번역
+- [x] **챗봇 멀티턴 기억** — `/chat`·`/chat/stream`이 `history[]`(이전 대화) 수신(무상태, 클라이언트 보관)
+- [x] **능동형 체크리스트** — `/documents/review`가 "확인 필요 항목" 생성 + `prev_checklist` 대조로 추가/삭제/유지
 - [ ] 프론트엔드(React 챗 UI) — 미구현(백엔드 API만)
 
 ## API 한눈에 보기
@@ -48,12 +50,17 @@
 ```json
 {
   "question": "병원 광고에 '국내 최초'라고 써도 되나요?",
+  "history": [                 // 멀티턴(선택) — 클라이언트가 보관·전달, 최근 10턴만 사용
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "content": "..."}
+  ],
   "top_k": 8,                  // 1~20, 검색 근거 수
   "source_types": null,        // ["statute","case","interpretation","decision","guideline"] 필터(선택)
   "as_of": null,               // "2024-01-01" 시점 조회(선택)
   "lang": "auto"               // auto|ko|en — en이면 영어로 답변(아래 "영어 입력 지원")
 }
 ```
+> **멀티턴**: FastAPI는 무상태입니다. 대화이력은 클라이언트(→Node/MySQL)가 보관하고 매 요청에 `history`로 되돌려줍니다. 검색(RAG)은 현재 `question` 기준.
 
 **응답** `text/event-stream` — `data:` 한 줄이 한 이벤트. 3종이 순서대로:
 ```
@@ -93,6 +100,7 @@ curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
 | `as_of` | – | 시점 조회 `YYYY-MM-DD` |
 | `top_k_per_segment` | – | 세그먼트별 근거 수(기본 4, 1~8) |
 | `lang` | – | `auto`\|`ko`\|`en` — 영문 문서 검토 시 `en`(아래 "영어 입력 지원") |
+| `prev_checklist` | – | 직전 응답의 `checklist`를 JSON 배열로 전달 → 능동형 재조정(추가/삭제/유지) |
 
 **응답** `application/json`
 ```json
@@ -109,13 +117,24 @@ curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
     "citations": [{"n":1,"label":"[가이드라인] 의료광고 가이드라인.pdf",
                    "source_type":"guideline","source_id":45,"snippet":"...","source_url":"...","trust_grade":""}]
   }],
+  "checklist": [{            // 능동형 확인목록 — 사람이 추가로 확인할 항목
+    "id": "first-claim",     // 안정 식별자(재조정 시 유지)
+    "title": "‘국내 최초’ 객관적 근거자료 보유 여부 확인",
+    "reason": "근거 없는 최초/유일 표현은 과장광고 소지",
+    "status": "todo",        // todo | ok | risk | na
+    "change": "added",       // added | kept | updated | removed (prev_checklist 대비)
+    "segment_index": 0,
+    "citations": [{ "n":1, "label":"...", ... }]
+  }],
   "extracted_by": "ocr",     // "text"=디지털 PDF / "ocr"=스캔본 비전 OCR
   "citation_check": {"output":[],"summary":{"total":0,"verified":0,"failed":0}},
   "method": "hybrid",
+  "lang": "ko",
   "as_of": null
 }
 ```
 - **프론트 렌더**: `original_text`↔`revised_text` diff 뷰 / `findings[].segment_index`로 `segments[]`에서 위험 조각을 찾아 `risk_level`별 색칠 → 클릭 시 사유·대안·근거 패널 / `extracted_by==="ocr"`면 "OCR 인식(오인식 가능)" 배지.
+- **능동형 체크리스트**: `checklist`를 할 일 목록으로 표시. 사용자가 문서를 고쳐 재요청할 때 직전 `checklist`를 `prev_checklist`로 보내면 해결된 항목은 `change:"removed"`, 새 항목은 `"added"`로 동적 갱신.
 
 ```bash
 curl -X POST localhost:8077/documents/review -F "file=@ad.pdf"

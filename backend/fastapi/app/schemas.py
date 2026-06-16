@@ -100,8 +100,14 @@ class VerifyResponse(BaseModel):
 Lang = Literal["auto", "ko", "en"]
 
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
     question: str
+    history: list[ChatTurn] = Field(default_factory=list, description="이전 대화(무상태 — 클라이언트가 보관·전달)")
     top_k: int = Field(8, ge=1, le=20)
     source_types: Optional[list[SourceType]] = None
     as_of: Optional[str] = None
@@ -148,11 +154,24 @@ class ReviewFinding(BaseModel):
     citations: list[ChatSource] = Field(default_factory=list, description="판단 근거")
 
 
+class ChecklistItem(BaseModel):
+    """능동형 확인목록 — 사람이 추가로 확인해야 할 항목(문서 내용 기반 동적 생성)."""
+    id: str = Field(description="안정 식별자(재조정 시 유지)")
+    title: str = Field(description="확인할 것")
+    reason: str = Field(description="왜 확인해야 하는지")
+    status: Literal["todo", "ok", "risk", "na"] = "todo"
+    change: Literal["added", "kept", "updated", "removed"] = Field(
+        "added", description="이전 체크리스트 대비 변화")
+    segment_index: Optional[int] = Field(None, description="관련 세그먼트(있으면)")
+    citations: list[ChatSource] = Field(default_factory=list, description="근거")
+
+
 class ReviewResponse(BaseModel):
     original_text: str = Field(description="before — 추출된 원문 전체")
     revised_text: str = Field(description="after — 위험 세그먼트를 대안 문구로 치환한 수정본")
     segments: list[str] = Field(description="문서를 분할한 세그먼트(원문)")
     findings: list[ReviewFinding] = Field(description="위험 세그먼트별 검토 결과(segment_text=before, suggestion=after)")
+    checklist: list[ChecklistItem] = Field(default_factory=list, description="능동형 확인목록(추가/삭제/유지 동적)")
     extracted_by: Literal["text", "ocr"] = Field("text", description="원문 추출 방식")
     citation_check: VerifyResponse = Field(description="findings 인용의 Citation Firewall 검증")
     method: str = "hybrid"
