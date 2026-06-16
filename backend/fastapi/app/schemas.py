@@ -120,3 +120,31 @@ class ChatResponse(BaseModel):
     citation_check: VerifyResponse = Field(description="답변 인용의 Citation Firewall 검증")
     method: str = "hybrid"
     as_of: Optional[str] = None
+
+
+# ---------- /documents/review (능동형 PDF 에디터) ----------
+class ReviewRequest(BaseModel):
+    """텍스트 직접 검토(파일 업로드는 multipart form 으로 처리)."""
+    text: str = Field(description="검토할 문서 본문(광고문구·동의서·약관 등)")
+    as_of: Optional[str] = None
+    top_k_per_segment: int = Field(4, ge=1, le=8, description="세그먼트별 근거 검색 개수")
+
+
+class ReviewFinding(BaseModel):
+    segment_index: int = Field(description="위험 세그먼트 번호(segments 배열 인덱스)")
+    segment_text: str = Field(description="원문 세그먼트")
+    risk_level: Literal["high", "medium", "low"]
+    issue: str = Field(description="위험 사유")
+    suggestion: str = Field(description="대안 문구(수정 권고)")
+    citations: list[ChatSource] = Field(default_factory=list, description="판단 근거")
+
+
+class ReviewResponse(BaseModel):
+    original_text: str = Field(description="before — 추출된 원문 전체")
+    revised_text: str = Field(description="after — 위험 세그먼트를 대안 문구로 치환한 수정본")
+    segments: list[str] = Field(description="문서를 분할한 세그먼트(원문)")
+    findings: list[ReviewFinding] = Field(description="위험 세그먼트별 검토 결과(segment_text=before, suggestion=after)")
+    extracted_by: Literal["text", "ocr"] = Field("text", description="원문 추출 방식")
+    citation_check: VerifyResponse = Field(description="findings 인용의 Citation Firewall 검증")
+    method: str = "hybrid"
+    as_of: Optional[str] = None

@@ -12,33 +12,184 @@
 - [x] **데이터**: 4대 법령+시행령/규칙, 행정규칙, 판례, **법령해석례·개인정보위 결정문·보건복지부 가이드라인**(의료광고 등) — 법제처 Open API + 게시판 수집기
 - [x] **임베딩 빌드 완료** chunks 212,459 (sqlite-vec)
 - [x] **AI 챗봇** `POST /chat`(+SSE) — gpt-5.5 RAG + Citation Firewall 검증
-- [ ] PDF 문서 에디터(기획서 ②) — 미구현
+- [x] **능동형 PDF 에디터** `POST /documents/review` — 위험 탐지 + before/after 수정안, 스캔본 **비전 OCR** fallback
 - [ ] 프론트엔드(React 챗 UI) — 미구현(백엔드 API만)
 
-## 4대 기능
+## API 한눈에 보기
 
-| # | 기능 | 엔드포인트 | 설명 |
-|---|---|---|---|
-| 1 | **RAG API** | `POST /v1/retrieve` | 조문·판례·해석례 통합 **하이브리드 검색**(FTS5 + 벡터 RRF), clause-level, `as_of` 시점 조회 |
-| 2 | **Source Pack** | `POST /v1/source-pack` | 질의 → 관련 근거를 **LLM 인용용 마크다운** 번들로 |
-| 3 | **Citation Firewall** | `POST /v1/verify` | AI 답변의 인용을 DB와 대조(법령 존재·조문 정확성·판례 유효성·시점) |
-| 4 | **MCP Server** | `/mcp/sse` (uvicorn에 마운트) | Claude/Cursor에 위 기능을 에이전트 도구로 노출. stdio 단독 실행(`python -m mcp_server.server`)도 지원 |
+> 베이스 URL 예: `http://localhost:8077` · 문서(Swagger): `GET /docs`
+> 인증: `API_KEYS` 설정 시 `x-api-key` 헤더 필수(미설정이면 생략). 분당 레이트리밋 적용.
 
-보조: `GET /v1/statutes/search`(lawbot 호환), `GET /health`, `GET /docs`(Swagger).
-
-## AI 챗봇 (기획서 핵심기능 ①)
-
-| 기능 | 엔드포인트 | 설명 |
+| 분류 | 메서드 · 경로 | 용도 |
 |---|---|---|
-| **AI 질의응답 챗봇** | `POST /chat`, `POST /chat/stream`(SSE) | 질문 → hybrid 근거검색 → **gpt-5.5** 답변(근거 [n] 인용) → **Citation Firewall 자동검증** |
+| 🟢 **프론트용** | `POST /chat/stream` | AI 질의응답 챗봇(SSE 스트리밍) |
+| 🟢 **프론트용** | `POST /documents/review` | PDF/텍스트 위험 검토 + before/after 수정안 |
+| 챗봇(단발) | `POST /chat` | 위와 동일, JSON 한 번에 반환(느림) |
+| 코어 | `POST /v1/retrieve` | 하이브리드 RAG 검색 |
+| 코어 | `POST /v1/source-pack` | LLM 인용용 근거 마크다운 번들 |
+| 코어 | `POST /v1/verify` | Citation Firewall(인용 검증) |
+| 코어 | `GET /v1/statutes/search` | 법령 검색(lawbot 호환) |
+| 에이전트 | `/mcp/sse` | MCP 서버(4도구) — uvicorn에 마운트 |
+| 운영 | `GET /health`, `GET /` | 상태 점검 / 기능 인덱스(인증 없음) |
 
-흐름: `hybrid_search → gpt-5.5(근거만 사용·환각금지·[n]인용) → extract_and_verify(답변)`.
-응답: `{answer, sources[n,label,snippet,url], citation_check{output,summary}}`. 근거 없으면 추측 없이 "확인 불가".
-스트리밍 이벤트: `sources` → `token`×N → `done`(citation_check). 생성 LLM은 `config.CHAT_MODEL`(기본 gpt-5.5).
+> **프론트(React)는 🟢 두 개만 호출**하면 됩니다. 나머지 `/v1/*`는 이 두 엔드포인트가 내부에서 호출하는 코어이자, MCP/외부 에이전트용 표면입니다. → [엔드유저 vs 코어](#엔드유저2개-vs-코어-구분)
+
+---
+
+## 📖 API 엔드포인트 상세
+
+### 1. `POST /chat/stream` — AI 챗봇 (SSE) 🟢
+
+질문 → 하이브리드 근거검색 → **gpt-5.5** 답변(근거 `[n]` 강제 인용) → **Citation Firewall** 자동검증.
+단발 JSON이 필요하면 동일 body로 `POST /chat`(아래 응답 본문과 같은 형태, gpt-5.5라 ~30s 소요 → UI는 스트리밍 권장).
+
+**요청** `Content-Type: application/json`
+```json
+{
+  "question": "병원 광고에 '국내 최초'라고 써도 되나요?",
+  "top_k": 8,                  // 1~20, 검색 근거 수
+  "source_types": null,        // ["statute","case","interpretation","decision","guideline"] 필터(선택)
+  "as_of": null                // "2024-01-01" 시점 조회(선택)
+}
+```
+
+**응답** `text/event-stream` — `data:` 한 줄이 한 이벤트. 3종이 순서대로:
+```
+data: {"type":"sources","method":"hybrid","sources":[
+  {"n":1,"label":"대법원 2006도9311","source_type":"case","source_id":123,
+   "snippet":"...","source_url":"https://...","trust_grade":"A"}]}
+
+data: {"type":"token","text":"‘국내 최초’ 표현은 "}     ← N개 누적
+data: {"type":"token","text":"의료법상 ... [1]"}
+
+data: {"type":"done","citation_check":{
+  "output":[{"raw":"의료법 제56조","type":"statute","exists":true,
+             "clause_accurate":true,"valid_as_of":null,"verified":true,
+             "matched_label":"의료법 제56조","matched_source_url":"...","note":""}],
+  "summary":{"total":1,"verified":1,"failed":0},"as_of":null}}
+```
+에러 시 `{"type":"error","message":"..."}`. ⚠️ 브라우저 `EventSource`는 GET만 지원 → POST는 `fetch` + `ReadableStream`으로 직접 파싱.
+
 ```bash
-curl -s -X POST localhost:8077/chat -H 'content-type: application/json' \
+curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
   -d '{"question":"병원 광고에 \"국내 최초\" 표현 써도 되나요?","top_k":5}'
 ```
+
+---
+
+### 2. `POST /documents/review` — 능동형 PDF 에디터 🟢
+
+문서(PDF/텍스트) → 텍스트 추출(**스캔본은 비전 OCR fallback**) → 세그먼트 분할 → 세그먼트별 RAG → **gpt-5.5** 위험 분석 → Citation Firewall.
+결과로 **before/after**(원문 ↔ 수정본)와 위험 세그먼트별 사유·대안·근거를 돌려줍니다.
+
+**요청** `Content-Type: multipart/form-data` — `file`(PDF) **또는** `text` 중 하나 필수
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `file` | ▲ | 검토할 PDF |
+| `text` | ▲ | PDF 대신 본문 직접 입력 |
+| `as_of` | – | 시점 조회 `YYYY-MM-DD` |
+| `top_k_per_segment` | – | 세그먼트별 근거 수(기본 4, 1~8) |
+
+**응답** `application/json`
+```json
+{
+  "original_text": "OO의원 국내 최초 무통증 시술\n부작용이 전혀 없는 100% 안전한 치료\n...",  // before
+  "revised_text":  "OO의원 국내 최초 무통증 시술\n시술 전 효과·부작용 가능성을 충분히 안내합니다\n...", // after
+  "segments": ["OO의원 국내 최초 무통증 시술", "부작용이 전혀 없는 100% 안전한 치료", "..."],
+  "findings": [{
+    "segment_index": 1,
+    "segment_text": "부작용이 전혀 없는 100% 안전한 치료",   // before(세그먼트)
+    "risk_level": "high",                                  // high | medium | low
+    "issue": "절대적 안전성 단정은 의료광고 가이드라인 위반 소지...",
+    "suggestion": "시술 전 효과·부작용 가능성을 충분히 안내합니다", // after(세그먼트)
+    "citations": [{"n":1,"label":"[가이드라인] 의료광고 가이드라인.pdf",
+                   "source_type":"guideline","source_id":45,"snippet":"...","source_url":"...","trust_grade":""}]
+  }],
+  "extracted_by": "ocr",     // "text"=디지털 PDF / "ocr"=스캔본 비전 OCR
+  "citation_check": {"output":[],"summary":{"total":0,"verified":0,"failed":0}},
+  "method": "hybrid",
+  "as_of": null
+}
+```
+- **프론트 렌더**: `original_text`↔`revised_text` diff 뷰 / `findings[].segment_index`로 `segments[]`에서 위험 조각을 찾아 `risk_level`별 색칠 → 클릭 시 사유·대안·근거 패널 / `extracted_by==="ocr"`면 "OCR 인식(오인식 가능)" 배지.
+
+```bash
+curl -X POST localhost:8077/documents/review -F "file=@ad.pdf"
+curl -X POST localhost:8077/documents/review -F "text=부작용 전혀 없는 100% 안전한 시술"
+```
+
+---
+
+### 3. `POST /v1/retrieve` — RAG 하이브리드 검색 (코어)
+
+질의 → FTS5 + 벡터 RRF 융합 → 조문·판례·해석례·결정문·가이드라인 통합 결과. `as_of` 시점 필터.
+
+**요청** `{"query":"무면허 의료행위","top_k":8,"source_types":null,"as_of":null}`
+**응답** `{"output":[Hit...],"as_of":null,"source":"medilaw.db","method":"hybrid"}`
+`Hit = {source_type, source_id, label, title, snippet, score, trust_grade, effective_from, source_url}`
+
+---
+
+### 4. `POST /v1/source-pack` — 근거 마크다운 번들 (코어)
+
+검색 결과를 **LLM이 그대로 인용**할 수 있는 번호 매긴 마크다운으로 패키징.
+
+**요청** `{"query":"의료광고 사전심의","max_items":8,"source_types":null,"as_of":null}`
+**응답** `{"output":"# 근거 자료 (Source Pack)\n## [1] ...","citations":[Citation...],"as_of":null}`
+
+---
+
+### 5. `POST /v1/verify` — Citation Firewall (코어)
+
+AI 답변의 법령·판례 인용을 DB와 대조(존재·조문 정확성·판례 유효성·시점). `text`(자동 추출) 또는 `citations`(구조화) 중 하나 이상.
+
+**요청** `{"text":"의료법 제27조와 가짜 의료법 제999조","as_of":"2026-06-15"}`
+**응답** `{"output":[VerifyResult...],"summary":{"total":2,"verified":1,"failed":1},"as_of":"2026-06-15"}`
+`VerifyResult = {raw, type(statute|case|unknown), exists, clause_accurate, valid_as_of, verified, matched_label, matched_source_url, note}`
+
+---
+
+### 6. `GET /v1/statutes/search` — 법령 검색 (코어, lawbot 호환)
+
+조문 FTS를 법령 단위로. 쿼리 파라미터: `q`, `kind`(법률|대통령령|고시…), `trust_grade`, `as_of`, `limit`(1~100).
+```bash
+curl 'localhost:8077/v1/statutes/search?q=의료광고&limit=10'
+```
+
+---
+
+### 7. `GET /health`, `GET /` — 운영 (인증 없음)
+
+`/health` → `{status, db_path, db_exists, db_size_mb, embeddings_ready, vec_extension, auth_enabled, mcp_mounted}`. `/` → 기능 인덱스.
+
+---
+
+### 엔드유저(2개) vs 코어 구분
+
+```
+POST /chat/stream     ─┐ 내부에서
+POST /documents/review ─┴─▶ hybrid_search(/v1/retrieve 코어) + extract_and_verify(/v1/verify 코어) 호출
+```
+- **React 프론트**: `/chat/stream`, `/documents/review` **2개만** 호출.
+- `/v1/*`(retrieve·source-pack·verify·statutes/search): 위 둘이 쓰는 **공유 코어**이자 **MCP·외부 에이전트용 API**. 프론트가 직접 부를 필요 없음(지우면 챗봇·에디터가 함께 죽음).
+
+---
+
+## 공통 규약
+
+**인증 헤더** — `API_KEYS` 설정 시 모든 엔드포인트(단 `/health`·`/` 제외)에 필수:
+```
+x-api-key: <발급키>
+```
+**에러 코드**
+
+| 코드 | 상황 |
+|---|---|
+| 400 | (review) `file`·`text` 둘 다 없음 / 텍스트·OCR 모두 빈 PDF / (verify) `text`·`citations` 둘 다 없음 |
+| 401 | `x-api-key` 누락·오류(`API_KEYS` 설정 시) |
+| 429 | 분당 호출 한도 초과 |
+| 503 | `OPENAI_API_KEY` 미설정 등 LLM 사용 불가(`/chat`·`/documents/review`) |
 
 ## 아키텍처
 
@@ -56,7 +207,8 @@ app/
     source_pack.py  POST /v1/source-pack
     verify.py       POST /v1/verify
     chat.py         POST /chat, POST /chat/stream (gpt-5.5 RAG 챗봇)
-  llm.py          OpenAI gpt-5.5 래퍼 (chat / chat_stream)
+    documents.py    POST /documents/review (PDF→위험검토→before/after, 비전 OCR fallback)
+  llm.py          OpenAI gpt-5.5 래퍼 (chat / chat_stream / chat_json / ocr_image)
 scripts/
   ingest_api.py        법제처 Open API → law/prec/admrul/expc/ppc 누적 수집(코퍼스 확장)
   ingest_guidelines.py 보건복지부 통합검색/게시판 → 가이드라인 PDF/HWPX/HWP 추출 → documents(guideline)
@@ -181,7 +333,7 @@ MCP는 별도 프로세스가 아니라 **FastAPI 앱(`app/main.py`)에 `/mcp` S
 
 ## 알려진 공백
 
-- **보건복지부 가이드라인**: 통합검색으로 수집됨(의료광고·비의료 건강관리·DTC 유전자검사·의료기관 개인정보보호 등 24건). 구형 `.hwp`는 PrvText 부분 추출, 스캔본은 OCR 필요(미지원).
+- **보건복지부 가이드라인**: 통합검색으로 수집됨(의료광고·비의료 건강관리·DTC 유전자검사·의료기관 개인정보보호 등 24건). 구형 `.hwp`는 PrvText 부분 추출. (가이드라인 **코퍼스 수집** 스크립트는 스캔본 OCR 미지원 — 단, **`POST /documents/review` 엔드포인트는 스캔본 PDF를 비전 OCR로 처리함**, 별개.)
 - 해석례(expc)·결정문(ppc)은 기본 DB엔 소량(검증분)만 → 필요 시 대량 수집.
 - 같은 문서가 포맷(hwpx vs pdf)이 달라 추출 텍스트가 다르면 dedup이 못 잡음(내용은 거의 동일).
 - 임베딩 빌드 전에는 FTS 전용이라 구어체 의미검색이 약함(빌드하면 해소).

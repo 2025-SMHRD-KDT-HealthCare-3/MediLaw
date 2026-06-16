@@ -11,7 +11,7 @@ from fastapi import FastAPI
 
 from app.config import API_KEYS, DB_PATH
 from app.db import has_embeddings, vec_loaded
-from app.routers import chat, retrieve, source_pack, verify
+from app.routers import chat, documents, retrieve, source_pack, verify
 
 app = FastAPI(
     title="MediLaw API — 의료법 RAG · Source Pack · Citation Firewall",
@@ -23,6 +23,7 @@ app.include_router(retrieve.router)
 app.include_router(source_pack.router)
 app.include_router(verify.router)
 app.include_router(chat.router)
+app.include_router(documents.router)
 
 # 기능 4 — MCP Server 를 같은 uvicorn 위에 마운트(/mcp SSE).
 # LLM(Claude/Cursor)이 별도 프로세스 없이 이 URL로 바로 도구를 사용.
@@ -63,6 +64,7 @@ def index():
         "service": "MediLaw API",
         "features": {
             "chat": "POST /chat , POST /chat/stream(SSE)",
+            "document_review": "POST /documents/review (PDF 업로드 위험 검토)",
             "rag": "POST /v1/retrieve",
             "source_pack": "POST /v1/source-pack",
             "citation_firewall": "POST /v1/verify",
