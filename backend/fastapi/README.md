@@ -39,6 +39,26 @@
 
 ---
 
+## 기능 검증 (smoke test)
+
+로컬(`DB_PATH=data/medilaw.db`, 인증 off, `OPENAI_API_KEY` 설정) 기준 각 기능 빠른 확인:
+
+| # | 기능 | 검증 방법 | 기대 |
+|---|---|---|---|
+| 1 | RAG 검색 | `POST /v1/retrieve {"query":"무면허 의료행위"}` | `output` 비어있지 않음, `method:"hybrid"` |
+| 2 | Source Pack | `POST /v1/source-pack {"query":"의료광고 심의"}` | `output` 마크다운 + `citations[]` |
+| 3 | Citation Firewall | `POST /v1/verify {"text":"의료법 제27조와 가짜 의료법 제999조"}` | `summary` verified 1 / failed 1 |
+| 4 | 법령 검색 | `GET /v1/statutes/search?q=의료광고` | `output[]` |
+| 5 | AI 챗봇 | `POST /chat {"question":"..."}` | `answer`+`sources`+`citation_check` |
+| 6 | 멀티턴/재작성 | `history` 포함 호출 | `search_query`가 standalone으로 재작성 |
+| 7 | PDF 에디터 | `POST /documents/review -F text=...` | `findings`+`checklist`+`revised_text` |
+| 8 | 능동형 체크리스트 | `prev_checklist` 재전달 | `change`(added/kept/removed)·`checklist_summary` 갱신 |
+| 9 | 영어 입력 | `POST /chat {"question":"...","lang":"en"}` | 영어 답변, 법령은 `is_official_en:true` |
+| 10 | MCP 서버 | `GET /health` | `mcp_mounted:true` (도구 4) |
+
+> ✅ **검증 완료 (2026-06-16)** — 기능별 에이전트 7개로 라이브 확인, 전 항목 **PASS**.
+> RAG(method=hybrid) · Source Pack(마크다운+citations) · Citation Firewall(제27조 verified/제999조 failed) · 챗봇(답변+인용, 후속질문 standalone 재작성) · PDF 에디터(findings+before/after+체크리스트 재조정) · 영어 입력(`articles_en` 910행, `MEDICAL SERVICE ACT Article 27` 공식 영문 부착) · MCP(도구 4 + `/mcp` 마운트).
+
 ## 📖 API 엔드포인트 상세
 
 ### 1. `POST /chat/stream` — AI 챗봇 (SSE) 🟢
