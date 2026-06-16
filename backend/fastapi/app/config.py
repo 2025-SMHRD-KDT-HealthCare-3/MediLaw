@@ -26,6 +26,10 @@ DEFAULT_TOP_K = 8
 # 인증 — x-api-key. 쉼표구분 다중키. 비어있으면 인증 비활성(로컬 개발)
 API_KEYS = {k.strip() for k in os.environ.get("API_KEYS", "").split(",") if k.strip()}
 
+# CORS — 프론트(React) origin 허용. 쉼표구분. 기본 "*"(인증은 x-api-key 헤더라 쿠키 미사용).
+# 배포 시 실제 도메인으로 좁히세요. 예: CORS_ORIGINS=https://app.example.com,http://localhost:5173
+CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()]
+
 # 레이트리밋 (lawbot 무료 데모: IP당 분당 30회)
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "30"))
 

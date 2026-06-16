@@ -8,8 +8,9 @@
 import os
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import API_KEYS, DB_PATH
+from app.config import API_KEYS, CORS_ORIGINS, DB_PATH
 from app.db import has_embeddings, vec_loaded
 from app.routers import chat, documents, retrieve, source_pack, verify
 
@@ -17,6 +18,16 @@ app = FastAPI(
     title="MediLaw API — 의료법 RAG · Source Pack · Citation Firewall",
     version="1.0.0",
     description="lawbot.org 호환 의료법 컴플라이언스 API (의료법·개인정보보호법·생명윤리법·정보통신망법)",
+)
+
+# CORS — React 등 브라우저 프론트가 직접 호출(POST /chat/stream, /documents/review).
+# 인증은 x-api-key 헤더라 쿠키를 안 써서 origin "*"도 안전. 배포 시 CORS_ORIGINS로 좁히세요.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(retrieve.router)

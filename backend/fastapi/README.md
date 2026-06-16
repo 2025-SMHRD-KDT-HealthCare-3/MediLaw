@@ -16,7 +16,8 @@
 - [x] **영어 입력 지원** `lang=en` — 법령은 **공식 영문**(법제처 elaw API), 판례·해석례·가이드라인은 비공식 번역
 - [x] **챗봇 멀티턴 기억** — `/chat`·`/chat/stream`이 `history[]`(이전 대화) 수신(무상태, 클라이언트 보관)
 - [x] **능동형 체크리스트** — `/documents/review`가 "확인 필요 항목" 생성 + `prev_checklist` 대조로 추가/삭제/유지
-- [ ] 프론트엔드(React 챗 UI) — 미구현(백엔드 API만)
+- [x] **프론트 연동 준비** — CORS 허용(`CORS_ORIGINS`) + React용 `fetch` SSE·multipart 예제([프론트 연동](#프론트-연동-react))
+- [ ] 프론트엔드(React 챗 UI) — 미구현(이 백엔드 API를 호출만 하면 됨)
 
 ## API 한눈에 보기
 
@@ -235,6 +236,62 @@ x-api-key: <발급키>
 | 429 | 분당 호출 한도 초과 |
 | 503 | `OPENAI_API_KEY` 미설정 등 LLM 사용 불가(`/chat`·`/documents/review`) |
 
+**CORS** — 브라우저 프론트가 직접 호출하므로 CORS 허용됨. 기본 `*`(개발용), 배포 시 `CORS_ORIGINS`로 좁힘:
+```
+CORS_ORIGINS=https://app.example.com,http://localhost:5173
+```
+인증을 쿠키가 아니라 `x-api-key` 헤더로 하므로 `allow_credentials=false` → origin `*`도 안전.
+
+## 프론트 연동 (React)
+
+프론트가 호출하는 건 🟢 **2개뿐**(`/chat/stream`, `/documents/review`). 아래 두 스니펫이면 끝.
+
+**① 챗봇 (SSE 스트리밍)** — `EventSource`는 GET만 되므로 POST는 `fetch` + `ReadableStream`으로 직접 파싱:
+```js
+async function streamChat(question, history = [], onToken, onDone) {
+  const res = await fetch("http://localhost:8077/chat/stream", {
+    method: "POST",
+    headers: { "content-type": "application/json" /*, "x-api-key": KEY */ },
+    body: JSON.stringify({ question, history, top_k: 8, lang: "auto" }),
+  });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const events = buf.split("\n\n");      // SSE 이벤트 경계
+    buf = events.pop();                     // 미완성 조각은 다음 청크로
+    for (const ev of events) {
+      const line = ev.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+      const msg = JSON.parse(line.slice(5).trim());
+      if (msg.type === "sources") onToken({ sources: msg.sources });        // 근거 먼저
+      else if (msg.type === "token") onToken({ text: msg.text });            // 토큰 누적
+      else if (msg.type === "done") onDone(msg.citation_check);              // 인용검증 결과
+      else if (msg.type === "error") throw new Error(msg.message);
+    }
+  }
+}
+```
+> 멀티턴: 응답을 받은 뒤 `history`에 `{role:"user",...}`·`{role:"assistant",...}`를 쌓아 다음 요청에 그대로 전달(서버 무상태). 최근 10턴만 사용됨.
+
+**② PDF/텍스트 검토** — `multipart/form-data`(JSON 아님, `Content-Type` 자동 설정에 맡길 것):
+```js
+async function reviewDoc({ file, text, prevChecklist }) {
+  const fd = new FormData();
+  if (file) fd.append("file", file);        // <input type=file> 의 File
+  if (text) fd.append("text", text);        // 또는 본문 직접
+  if (prevChecklist) fd.append("prev_checklist", JSON.stringify(prevChecklist));
+  const res = await fetch("http://localhost:8077/documents/review", {
+    method: "POST", body: fd /*, headers: { "x-api-key": KEY } */,
+  });
+  return res.json(); // { original_text, revised_text, findings[], checklist[], ... }
+}
+```
+> 렌더 힌트: `original_text`↔`revised_text` diff 뷰 · `findings[].risk_level`별 색칠 · `extracted_by==="ocr"`면 "OCR 인식" 배지 · `checklist`는 할 일 목록(`checklist_summary`로 진행률). 응답 필드 전체는 [엔드포인트 상세](#2-post-documentsreview--능동형-pdf-에디터-) 참고.
+
 ## 아키텍처
 
 ```
@@ -397,6 +454,7 @@ MCP는 별도 프로세스가 아니라 **FastAPI 앱(`app/main.py`)에 `/mcp` S
 
 `Dockerfile` 로 컨테이너화. DB는 git/도커 제외 → 볼륨에 업로드 후 `DB_PATH=/app/data/medilaw.db` 설정,
 `OPENAI_API_KEY` 등은 env로. (`railway.toml` 은 제거함 — 이 디렉토리 단독 자동배포 안 함.)
+배포 시 `CORS_ORIGINS`를 실제 프론트 도메인으로 좁히고(`*` 금지), 공개면 `API_KEYS`를 설정.
 
 ## 알려진 공백
 
