@@ -58,6 +58,32 @@ def translate(text: str, target: str = "ko") -> str:
         return text
 
 
+def rewrite_query(history: list[dict], question: str) -> str:
+    """멀티턴 후속질문을 '독립 검색질의(한국어)'로 재작성.
+
+    "그럼 그건?" 같은 후속질문은 단독으론 검색이 안 되므로 대화 맥락을 합쳐
+    한국어 standalone 질의로 변환(검색 코퍼스가 한국어 → 영어 입력도 함께 해결).
+    이력 없음/실패 시 원문 반환(degradation).
+    """
+    if not history:
+        return question
+    convo = "\n".join(f"{t['role']}: {t['content']}" for t in history)
+    try:
+        resp = _client().chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[
+                {"role": "system", "content":
+                    "Given the conversation and a follow-up message, rewrite the follow-up as a single "
+                    "standalone search query in Korean that captures the full intent. "
+                    "Output only the query, no explanation."},
+                {"role": "user", "content": f"{convo}\n\nfollow-up: {question}"},
+            ],
+        )
+        return (resp.choices[0].message.content or "").strip() or question
+    except LLMUnavailable:
+        return question
+
+
 def ocr_image(b64_png: str) -> str:
     """비전 모델로 이미지(base64 PNG)에서 한국어 텍스트 추출.
 

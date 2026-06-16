@@ -58,9 +58,17 @@ _NO_EVIDENCE_EN = ("This cannot be confirmed from the provided materials. Please
 
 
 def _build(req: ChatRequest):
-    """(messages, sources, method, lang). 근거 없으면 messages=None."""
+    """(messages, sources, method, lang, search_q). 근거 없으면 messages=None."""
     lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
-    search_q = llm.translate(req.question, "ko") if lang == "en" else req.question
+
+    # 멀티턴이면 후속질문을 독립 한국어 질의로 재작성(검색 정확도↑, EN도 함께 해결).
+    if req.history:
+        search_q = llm.rewrite_query(
+            [{"role": t.role, "content": t.content} for t in req.history[-MAX_HISTORY:]],
+            req.question,
+        )
+    else:
+        search_q = llm.translate(req.question, "ko") if lang == "en" else req.question
 
     hits, method = hybrid_search(
         search_q, req.source_types, top_k=req.top_k, as_of=req.as_of
@@ -80,7 +88,7 @@ def _build(req: ChatRequest):
         sources.append(s)
 
     if not hits:
-        return None, sources, method, lang
+        return None, sources, method, lang, search_q
 
     if lang == "en":
         parts = []
@@ -98,7 +106,7 @@ def _build(req: ChatRequest):
     messages = [{"role": "system", "content": system}]
     messages += [{"role": t.role, "content": t.content} for t in req.history[-MAX_HISTORY:]]
     messages.append({"role": "user", "content": user})
-    return messages, sources, method, lang
+    return messages, sources, method, lang, search_q
 
 
 def _citation_check(answer: str, as_of) -> VerifyResponse:
@@ -113,17 +121,18 @@ def _citation_check(answer: str, as_of) -> VerifyResponse:
 
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 def chat(req: ChatRequest):
-    messages, sources, method, lang = _build(req)
+    messages, sources, method, lang, search_q = _build(req)
     no_ev = _NO_EVIDENCE_EN if lang == "en" else _NO_EVIDENCE
     if messages is None:
         return ChatResponse(answer=no_ev, sources=[], method=method, lang=lang,
+                            search_query=search_q,
                             citation_check=_citation_check("", req.as_of), as_of=req.as_of)
     try:
         answer = llm.chat(messages)
     except llm.LLMUnavailable as e:
         raise HTTPException(503, str(e))
     return ChatResponse(
-        answer=answer, sources=sources, method=method, lang=lang,
+        answer=answer, sources=sources, method=method, lang=lang, search_query=search_q,
         citation_check=_citation_check(answer, req.as_of), as_of=req.as_of,
     )
 
@@ -134,10 +143,10 @@ def _sse(obj: dict) -> str:
 
 @router.post("/chat/stream", dependencies=[Depends(require_api_key)])
 def chat_stream(req: ChatRequest):
-    messages, sources, method, lang = _build(req)
+    messages, sources, method, lang, search_q = _build(req)
 
     def gen():
-        yield _sse({"type": "sources", "method": method, "lang": lang,
+        yield _sse({"type": "sources", "method": method, "lang": lang, "search_query": search_q,
                     "sources": [s.model_dump() for s in sources]})
         if messages is None:
             yield _sse({"type": "token", "text": _NO_EVIDENCE_EN if lang == "en" else _NO_EVIDENCE})

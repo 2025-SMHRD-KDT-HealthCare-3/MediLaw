@@ -60,7 +60,7 @@
   "lang": "auto"               // auto|ko|en — en이면 영어로 답변(아래 "영어 입력 지원")
 }
 ```
-> **멀티턴**: FastAPI는 무상태입니다. 대화이력은 클라이언트(→Node/MySQL)가 보관하고 매 요청에 `history`로 되돌려줍니다. 검색(RAG)은 현재 `question` 기준.
+> **멀티턴**: FastAPI는 무상태입니다. 대화이력은 클라이언트(→Node/MySQL)가 보관하고 매 요청에 `history`로 되돌려줍니다. `history`가 있으면 후속질문("그럼 그건?")을 **독립 검색질의로 재작성**해 RAG 정확도를 높입니다(응답 `search_query`에 실제 사용 질의 노출).
 
 **응답** `text/event-stream` — `data:` 한 줄이 한 이벤트. 3종이 순서대로:
 ```
@@ -124,8 +124,10 @@ curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
     "status": "todo",        // todo | ok | risk | na
     "change": "added",       // added | kept | updated | removed (prev_checklist 대비)
     "segment_index": 0,
-    "citations": [{ "n":1, "label":"...", ... }]
+    "citations": [{ "n":1, "label":"...", ... }],
+    "note": ""               // 사용자 메모(prev_checklist로 보내면 보존됨)
   }],
+  "checklist_summary": { "total":3, "todo":2, "ok":1, "risk":0, "na":0 },
   "extracted_by": "ocr",     // "text"=디지털 PDF / "ocr"=스캔본 비전 OCR
   "citation_check": {"output":[],"summary":{"total":0,"verified":0,"failed":0}},
   "method": "hybrid",
@@ -134,7 +136,7 @@ curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
 }
 ```
 - **프론트 렌더**: `original_text`↔`revised_text` diff 뷰 / `findings[].segment_index`로 `segments[]`에서 위험 조각을 찾아 `risk_level`별 색칠 → 클릭 시 사유·대안·근거 패널 / `extracted_by==="ocr"`면 "OCR 인식(오인식 가능)" 배지.
-- **능동형 체크리스트**: `checklist`를 할 일 목록으로 표시. 사용자가 문서를 고쳐 재요청할 때 직전 `checklist`를 `prev_checklist`로 보내면 해결된 항목은 `change:"removed"`, 새 항목은 `"added"`로 동적 갱신.
+- **능동형 체크리스트**: `checklist`를 할 일 목록으로 표시(`checklist_summary`로 진행률). 사용자가 문서를 고쳐 재요청할 때 직전 `checklist`를 `prev_checklist`로 보내면 해결 항목은 `change:"removed"`, 새 항목은 `"added"`로 동적 갱신. 사용자가 항목을 `ok`/`na`로 체크하거나 `note`를 달아 되돌려주면 다음 분석이 그 상태·메모를 **보존**합니다(단, 문서에 위반 문구가 명백히 남아 있으면 안전하게 `risk`로 재플래그).
 
 ```bash
 curl -X POST localhost:8077/documents/review -F "file=@ad.pdf"

@@ -20,6 +20,7 @@ from app.rag import hybrid_search
 from app.schemas import (
     ChatSource,
     ChecklistItem,
+    ChecklistSummary,
     ReviewFinding,
     ReviewResponse,
     VerifyResponse,
@@ -53,6 +54,8 @@ SYSTEM_PROMPT = (
     "segment_index(관련 세그먼트, 없으면 null), citations(근거 [번호] 정수배열).\n"
     "   [이전체크리스트]가 주어지면 대조해 change 표시: 유지=kept, 새로추가=added, 내용바뀜=updated, "
     "더이상 불필요=removed. 유지·갱신 항목은 이전 id 를 그대로 쓰세요. 이전이 없으면 모두 added.\n"
+    "   이전 항목의 status 는 사용자가 직접 설정한 값일 수 있습니다 — ok/na 로 표시된 항목은 사용자가 "
+    "확인·해소한 것이니 문서가 명백히 위반하지 않는 한 그 status 를 유지하고 todo 로 되돌리지 마세요.\n"
     '7. 반드시 다음 JSON 형식으로만 응답: {"findings":[{"segment_index":0,"risk_level":"high",'
     '"issue":"...","suggestion":"...","citations":[1]}],"checklist":[{"id":"first-claim",'
     '"title":"...","reason":"...","status":"todo","change":"added","segment_index":0,"citations":[1]}]}'
@@ -76,6 +79,8 @@ SYSTEM_PROMPT_EN = (
     "status (todo|ok|risk|na), segment_index (related segment or null), citations ([source] int array).\n"
     "   If [PreviousChecklist] is given, reconcile and set change: kept, added, updated, or removed "
     "(no longer needed). Reuse the previous id for kept/updated items. If none given, all are added.\n"
+    "   A previous item's status may have been set by the user — keep ok/na items as-is (the user "
+    "resolved them) unless the document clearly still violates; do not reset them to todo.\n"
     '7. Respond ONLY in this JSON format: {"findings":[{"segment_index":0,"risk_level":"high",'
     '"issue":"...","suggestion":"...","citations":[1]}],"checklist":[{"id":"first-claim",'
     '"title":"...","reason":"...","status":"todo","change":"added","segment_index":0,"citations":[1]}]}'
@@ -193,11 +198,18 @@ def _review(text: str, as_of, top_k: int, extracted_by: str = "text",
                               citation_check=_citation_check("", as_of),
                               method=method, lang=lang, as_of=as_of)
 
-    # 이전 체크리스트(있으면) — LLM이 추가/삭제/유지 재조정
+    # 이전 체크리스트(있으면) — LLM이 추가/삭제/유지 재조정. 사용자 status/note 보존.
     prev_block = ""
+    prev_notes: dict[str, str] = {}
     if prev_checklist:
-        slim = [{"id": p.get("id"), "title": p.get("title"), "status": p.get("status")}
-                for p in prev_checklist if isinstance(p, dict)]
+        slim = []
+        for p in prev_checklist:
+            if not isinstance(p, dict) or not p.get("id"):
+                continue
+            slim.append({"id": p.get("id"), "title": p.get("title"),
+                         "status": p.get("status"), "note": p.get("note", "")})
+            if p.get("note"):
+                prev_notes[str(p["id"])] = p["note"]
         label = "[PreviousChecklist]" if lang == "en" else "[이전체크리스트]"
         prev_block = f"\n\n{label}\n{json.dumps(slim, ensure_ascii=False)}"
 
@@ -241,22 +253,28 @@ def _review(text: str, as_of, top_k: int, extracted_by: str = "text",
             citations=cites,
         ))
 
-    # 능동형 체크리스트 파싱
+    # 능동형 체크리스트 파싱 (사용자 note 보존 + 상태 요약)
     checklist: list[ChecklistItem] = []
+    summary = ChecklistSummary()
     for c in data.get("checklist", []):
         if not isinstance(c, dict) or not c.get("title"):
             continue
         si = c.get("segment_index")
         si = si if isinstance(si, int) and 0 <= si < len(segments) else None
+        cid = str(c.get("id") or f"item-{len(checklist) + 1}")
+        status = c.get("status") if c.get("status") in ("todo", "ok", "risk", "na") else "todo"
         checklist.append(ChecklistItem(
-            id=str(c.get("id") or f"item-{len(checklist) + 1}"),
+            id=cid,
             title=c.get("title", ""),
             reason=c.get("reason", ""),
-            status=c.get("status") if c.get("status") in ("todo", "ok", "risk", "na") else "todo",
+            status=status,
             change=c.get("change") if c.get("change") in ("added", "kept", "updated", "removed") else "added",
             segment_index=si,
             citations=[by_n[n] for n in c.get("citations", []) if n in by_n],
+            note=c.get("note") or prev_notes.get(cid, ""),  # 사용자 메모 보존
         ))
+        setattr(summary, status, getattr(summary, status) + 1)
+    summary.total = len(checklist)
 
     # before→after: 원문에서 위험 세그먼트를 대안 문구로 치환한 수정본
     revised = text
@@ -266,7 +284,8 @@ def _review(text: str, as_of, top_k: int, extracted_by: str = "text",
 
     audit = "\n".join(f"{f.issue} {f.suggestion}" for f in findings)
     return ReviewResponse(original_text=text, revised_text=revised,
-                          segments=segments, findings=findings, checklist=checklist,
+                          segments=segments, findings=findings,
+                          checklist=checklist, checklist_summary=summary,
                           extracted_by=extracted_by,
                           citation_check=_citation_check(audit, as_of),
                           method=method, lang=lang, as_of=as_of)
