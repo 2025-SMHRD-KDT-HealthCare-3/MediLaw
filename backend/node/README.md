@@ -39,8 +39,8 @@ Examples:
 ```bash
 curl http://localhost:4000/api/health
 curl http://localhost:4000/api/rag/health
-curl -X POST http://localhost:4000/api/rag/v1/retrieve -H "content-type: application/json" -d "{\"query\":\"의료광고 심의\",\"top_k\":3}"
-curl -X POST http://localhost:4000/api/rag/documents/review -F "text=부작용 전혀 없는 100% 안전한 시술"
+curl -X POST http://localhost:4000/api/rag/v1/retrieve -H "content-type: application/json" -d "{\"query\":\"medical advertising safety\",\"top_k\":3}"
+curl -X POST http://localhost:4000/api/rag/documents/review -F "text=This treatment has no side effects and is one hundred percent safe."
 curl http://localhost:4000/api/server-check
 ```
 
