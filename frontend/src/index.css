@@ -1,8 +1,13 @@
-:root {
-  color-scheme: light dark;
-  font-family: system-ui, sans-serif;
-}
+@import "tailwindcss";
 
-body {
-  margin: 0;
+@theme {
+  /* 브랜드 색상 */
+  --color-navy: #14304A;
+  --color-aqua: #22C9DB;
+  --color-brand-blue: #4A90D9;
+
+  /* 검증 상태 색상 (데이터 전용) */
+  --color-confirmed: #13AAA0;
+  --color-warning: #E8A33D;
+  --color-error: #D9534F;
 }
