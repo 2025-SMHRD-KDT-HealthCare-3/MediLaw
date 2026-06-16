@@ -13,6 +13,9 @@
 - [x] **임베딩 빌드 완료** chunks 212,459 (sqlite-vec)
 - [x] **AI 챗봇** `POST /chat`(+SSE) — gpt-5.5 RAG + Citation Firewall 검증
 - [x] **능동형 PDF 에디터** `POST /documents/review` — 위험 탐지 + before/after 수정안, 스캔본 **비전 OCR** fallback
+- [x] **영어 입력 지원** `lang=en` — 법령은 **공식 영문**(법제처 elaw API), 판례·해석례·가이드라인은 비공식 번역
+- [x] **챗봇 멀티턴 기억** — `/chat`·`/chat/stream`이 `history[]`(이전 대화) 수신(무상태, 클라이언트 보관)
+- [x] **능동형 체크리스트** — `/documents/review`가 "확인 필요 항목" 생성 + `prev_checklist` 대조로 추가/삭제/유지
 - [ ] 프론트엔드(React 챗 UI) — 미구현(백엔드 API만)
 
 ## API 한눈에 보기
@@ -47,11 +50,17 @@
 ```json
 {
   "question": "병원 광고에 '국내 최초'라고 써도 되나요?",
+  "history": [                 // 멀티턴(선택) — 클라이언트가 보관·전달, 최근 10턴만 사용
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "content": "..."}
+  ],
   "top_k": 8,                  // 1~20, 검색 근거 수
   "source_types": null,        // ["statute","case","interpretation","decision","guideline"] 필터(선택)
-  "as_of": null                // "2024-01-01" 시점 조회(선택)
+  "as_of": null,               // "2024-01-01" 시점 조회(선택)
+  "lang": "auto"               // auto|ko|en — en이면 영어로 답변(아래 "영어 입력 지원")
 }
 ```
+> **멀티턴**: FastAPI는 무상태입니다. 대화이력은 클라이언트(→Node/MySQL)가 보관하고 매 요청에 `history`로 되돌려줍니다. 검색(RAG)은 현재 `question` 기준.
 
 **응답** `text/event-stream` — `data:` 한 줄이 한 이벤트. 3종이 순서대로:
 ```
@@ -90,6 +99,8 @@ curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
 | `text` | ▲ | PDF 대신 본문 직접 입력 |
 | `as_of` | – | 시점 조회 `YYYY-MM-DD` |
 | `top_k_per_segment` | – | 세그먼트별 근거 수(기본 4, 1~8) |
+| `lang` | – | `auto`\|`ko`\|`en` — 영문 문서 검토 시 `en`(아래 "영어 입력 지원") |
+| `prev_checklist` | – | 직전 응답의 `checklist`를 JSON 배열로 전달 → 능동형 재조정(추가/삭제/유지) |
 
 **응답** `application/json`
 ```json
@@ -106,13 +117,24 @@ curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
     "citations": [{"n":1,"label":"[가이드라인] 의료광고 가이드라인.pdf",
                    "source_type":"guideline","source_id":45,"snippet":"...","source_url":"...","trust_grade":""}]
   }],
+  "checklist": [{            // 능동형 확인목록 — 사람이 추가로 확인할 항목
+    "id": "first-claim",     // 안정 식별자(재조정 시 유지)
+    "title": "‘국내 최초’ 객관적 근거자료 보유 여부 확인",
+    "reason": "근거 없는 최초/유일 표현은 과장광고 소지",
+    "status": "todo",        // todo | ok | risk | na
+    "change": "added",       // added | kept | updated | removed (prev_checklist 대비)
+    "segment_index": 0,
+    "citations": [{ "n":1, "label":"...", ... }]
+  }],
   "extracted_by": "ocr",     // "text"=디지털 PDF / "ocr"=스캔본 비전 OCR
   "citation_check": {"output":[],"summary":{"total":0,"verified":0,"failed":0}},
   "method": "hybrid",
+  "lang": "ko",
   "as_of": null
 }
 ```
 - **프론트 렌더**: `original_text`↔`revised_text` diff 뷰 / `findings[].segment_index`로 `segments[]`에서 위험 조각을 찾아 `risk_level`별 색칠 → 클릭 시 사유·대안·근거 패널 / `extracted_by==="ocr"`면 "OCR 인식(오인식 가능)" 배지.
+- **능동형 체크리스트**: `checklist`를 할 일 목록으로 표시. 사용자가 문서를 고쳐 재요청할 때 직전 `checklist`를 `prev_checklist`로 보내면 해결된 항목은 `change:"removed"`, 새 항목은 `"added"`로 동적 갱신.
 
 ```bash
 curl -X POST localhost:8077/documents/review -F "file=@ad.pdf"
@@ -208,17 +230,40 @@ app/
     verify.py       POST /v1/verify
     chat.py         POST /chat, POST /chat/stream (gpt-5.5 RAG 챗봇)
     documents.py    POST /documents/review (PDF→위험검토→before/after, 비전 OCR fallback)
-  llm.py          OpenAI gpt-5.5 래퍼 (chat / chat_stream / chat_json / ocr_image)
+  llm.py          OpenAI gpt-5.5 래퍼 (chat / chat_stream / chat_json / ocr_image / translate)
+  english.py      영어 입력 지원: 언어감지 + 공식 영문 법령(articles_en) 조회
 scripts/
   ingest_api.py        법제처 Open API → law/prec/admrul/expc/ppc 누적 수집(코퍼스 확장)
   ingest_guidelines.py 보건복지부 통합검색/게시판 → 가이드라인 PDF/HWPX/HWP 추출 → documents(guideline)
   dedup_documents.py   documents 본문 중복 제거(idempotent)
   build_embeddings.py  articles+cases+documents → chunks(+sqlite-vec) 임베딩 (incremental/rebuild)
+  ingest_elaw.py       법제처 영문법령 API(target=elaw) → articles_en (영어 입력용 공식 영문)
 mcp_server/
   server.py      MCP 서버 (retrieve/source_pack/verify/statutes_search 도구)
 data/
   medilaw.db     law-app에서 복사 (cases 20,975 + articles 189,238 + statutes 3,438 + FTS5)
 ```
+
+## 영어 입력 지원 (`lang=en`)
+
+`/chat`·`/chat/stream`·`/documents/review` 는 `lang`(`auto`\|`ko`\|`en`)을 받습니다. `auto`는 입력의 한글 비율로 자동 감지.
+
+영어 질의 흐름 (`app/english.py`):
+```
+EN 질문 → ① llm.translate(EN→KO)로 검색어 번역 (FTS는 한글 토큰이라 필수)
+        → ② hybrid_search(KO 코퍼스)
+        → ③ statute hit → articles_en 에서 공식 영문 조문 부착(label_en/snippet_en/is_official_en)
+        → ④ gpt-5.5: 공식 영문 조문 인용 + 그 외(판례·해석례·가이드라인)는 비공식 번역 → 영어 답변
+```
+- **법령 = 공식 영문**: 법제처 영문법령 Open API(`target=elaw`)로 적재한 `articles_en` 사용 → 법령명·조문을 **공식 번역 그대로** 인용(환각·오역 방지). `ChatSource.is_official_en=true`.
+- **판례·해석례·가이드라인 = 비공식 번역**: 공식 영문이 없어 LLM이 즉석 번역하고 `(unofficial translation)`으로 표기.
+- 응답에 실제 사용 언어 `lang` 포함.
+
+**영문 법령 적재** (최초 1회 / 개정 반영 시):
+```bash
+LAW_OC=H-Lab python3 scripts/ingest_elaw.py     # 4대법+시행령/규칙 영문 조문 → articles_en
+```
+> ⚠️ 한계: ① 영문판은 한국어 개정보다 **시행일이 뒤처질 수 있음**(`articles_en.eng_effective` 참고). ② Citation Firewall 정규식은 한국어 인용 기준이라 **영어 답변에선 검증 적중이 낮음**(근거 자체는 공식 영문이라 신뢰 가능). ③ 일부 시행규칙은 공식 영문 없음 → `[KO src]`로 표기.
 
 ## 검색 동작 (graceful degradation)
 

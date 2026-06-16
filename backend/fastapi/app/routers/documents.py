@@ -6,6 +6,7 @@ POST /documents/review : multipart(file=PDF) 또는 JSON({text}) 둘 다 허용
 """
 import base64
 import io
+import json
 import logging
 import re
 
@@ -14,9 +15,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from app import llm
 from app.auth import require_api_key
 from app.citations import extract_and_verify
+from app.english import detect_lang, english_article
 from app.rag import hybrid_search
 from app.schemas import (
     ChatSource,
+    ChecklistItem,
     ReviewFinding,
     ReviewResponse,
     VerifyResponse,
@@ -45,8 +48,37 @@ SYSTEM_PROMPT = (
     "4. issue 는 위험 사유 설명. suggestion 은 그 세그먼트를 '그대로 대체할' 실제 수정 문구만 "
     "한국어로 쓰세요(‘~하세요’ 같은 지시·설명·따옴표 없이 광고/문서에 바로 넣을 문장 자체).\n"
     "5. risk_level 은 high/medium/low 중 하나.\n"
-    '6. 반드시 다음 JSON 형식으로만 응답: '
-    '{"findings":[{"segment_index":0,"risk_level":"high","issue":"...","suggestion":"...","citations":[1,2]}]}'
+    "6. 또한 'checklist'(능동형 확인목록)를 만드세요 — 사람이 이 문서에서 추가로 확인해야 할 항목.\n"
+    "   각 항목: id(짧은 영문 슬러그), title(확인할 것), reason(왜), status(todo|ok|risk|na), "
+    "segment_index(관련 세그먼트, 없으면 null), citations(근거 [번호] 정수배열).\n"
+    "   [이전체크리스트]가 주어지면 대조해 change 표시: 유지=kept, 새로추가=added, 내용바뀜=updated, "
+    "더이상 불필요=removed. 유지·갱신 항목은 이전 id 를 그대로 쓰세요. 이전이 없으면 모두 added.\n"
+    '7. 반드시 다음 JSON 형식으로만 응답: {"findings":[{"segment_index":0,"risk_level":"high",'
+    '"issue":"...","suggestion":"...","citations":[1]}],"checklist":[{"id":"first-claim",'
+    '"title":"...","reason":"...","status":"todo","change":"added","segment_index":0,"citations":[1]}]}'
+)
+
+SYSTEM_PROMPT_EN = (
+    "You review a Korean healthcare business document (ad copy, patient consent form, terms) for "
+    "compliance risk under Korean law (Medical Service Act, Personal Information Protection Act, "
+    "Bioethics and Safety Act, Network Act) and related precedents/interpretations/guidelines.\n"
+    "[Segments] are numbered document fragments; [Sources] are numbered statutes/precedents/guidelines.\n"
+    "Rules:\n"
+    "1. Report only segments that are violating, exaggerated, or misleading (omit clean ones).\n"
+    "2. Base judgments ONLY on [Sources]. No speculation.\n"
+    "3. In citations put only the [Source] numbers used, as an integer array.\n"
+    "4. 'issue' explains the risk. 'suggestion' is the actual replacement text to drop into the "
+    "document (the sentence itself, in the document's language — no instructions or quotes).\n"
+    "   Sources marked '(official English)' are official statute translations; cite their names exactly.\n"
+    "5. risk_level is one of high/medium/low.\n"
+    "6. Also build a 'checklist' — items a human should additionally verify for this document.\n"
+    "   Each item: id (short english slug), title (what to check), reason (why), "
+    "status (todo|ok|risk|na), segment_index (related segment or null), citations ([source] int array).\n"
+    "   If [PreviousChecklist] is given, reconcile and set change: kept, added, updated, or removed "
+    "(no longer needed). Reuse the previous id for kept/updated items. If none given, all are added.\n"
+    '7. Respond ONLY in this JSON format: {"findings":[{"segment_index":0,"risk_level":"high",'
+    '"issue":"...","suggestion":"...","citations":[1]}],"checklist":[{"id":"first-claim",'
+    '"title":"...","reason":"...","status":"todo","change":"added","segment_index":0,"citations":[1]}]}'
 )
 
 
@@ -105,22 +137,33 @@ def _segment(text: str) -> list[str]:
     return segs[:MAX_SEGMENTS]
 
 
-def _gather_evidence(segments: list[str], top_k: int, as_of):
-    """세그먼트별 검색 → (전역번호 ChatSource 목록, n→source 맵, method)."""
+def _gather_evidence(segments: list[str], top_k: int, as_of, lang: str = "ko"):
+    """세그먼트별 검색 → (전역번호 ChatSource 목록, n→source 맵, method).
+
+    lang=='en' 이면 검색용으로 세그먼트를 한국어 번역, 법령엔 공식 영문 부착.
+    """
     by_key: dict[tuple[str, int], ChatSource] = {}
     method = "fts"
     for seg in segments:
-        hits, m = hybrid_search(seg, None, top_k=top_k, as_of=as_of)
+        search_seg = llm.translate(seg, "ko") if lang == "en" else seg
+        hits, m = hybrid_search(search_seg, None, top_k=top_k, as_of=as_of)
         if m == "hybrid":
             method = "hybrid"
         for h in hits:
             key = (h.source_type, h.source_id)
             if key not in by_key:
-                by_key[key] = ChatSource(
+                s = ChatSource(
                     n=len(by_key) + 1, label=h.label, source_type=h.source_type,
                     source_id=h.source_id, snippet=h.snippet,
                     source_url=h.source_url, trust_grade=h.trust_grade,
                 )
+                if lang == "en" and h.source_type == "statute":
+                    en = english_article(h.source_id)
+                    if en:
+                        s.label_en = f"{en['law_name_en']} Article {en['article_no']}"
+                        s.snippet_en = en["body_en"]
+                        s.is_official_en = True
+                by_key[key] = s
     sources = list(by_key.values())
     return sources, {s.n: s for s in sources}, method
 
@@ -135,24 +178,46 @@ def _citation_check(text: str, as_of) -> VerifyResponse:
     )
 
 
-def _review(text: str, as_of, top_k: int, extracted_by: str = "text") -> ReviewResponse:
+def _review(text: str, as_of, top_k: int, extracted_by: str = "text",
+            lang: str = "auto", prev_checklist: list | None = None) -> ReviewResponse:
     segments = _segment(text)
     if not segments:
         raise HTTPException(400, "문서에서 검토할 텍스트를 추출하지 못했습니다(이미지 OCR도 비었음).")
+    if lang not in ("ko", "en"):
+        lang = detect_lang(text)
 
-    sources, by_n, method = _gather_evidence(segments, top_k, as_of)
+    sources, by_n, method = _gather_evidence(segments, top_k, as_of, lang)
     if not sources:
         return ReviewResponse(original_text=text, revised_text=text,
-                              segments=segments, findings=[], extracted_by=extracted_by,
+                              segments=segments, findings=[], checklist=[], extracted_by=extracted_by,
                               citation_check=_citation_check("", as_of),
-                              method=method, as_of=as_of)
+                              method=method, lang=lang, as_of=as_of)
+
+    # 이전 체크리스트(있으면) — LLM이 추가/삭제/유지 재조정
+    prev_block = ""
+    if prev_checklist:
+        slim = [{"id": p.get("id"), "title": p.get("title"), "status": p.get("status")}
+                for p in prev_checklist if isinstance(p, dict)]
+        label = "[PreviousChecklist]" if lang == "en" else "[이전체크리스트]"
+        prev_block = f"\n\n{label}\n{json.dumps(slim, ensure_ascii=False)}"
 
     seg_block = "\n".join(f"[{i}] {s}" for i, s in enumerate(segments))
-    ev_block = "\n\n".join(f"[{s.n}] {s.label}\n{s.snippet}" for s in sources)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"[세그먼트]\n{seg_block}\n\n[근거]\n{ev_block}"},
-    ]
+    if lang == "en":
+        ev_block = "\n\n".join(
+            f"[{s.n}] {s.label_en} (official English)\n{s.snippet_en}" if s.is_official_en
+            else f"[{s.n}] {s.label} (Korean source)\n{s.snippet}"
+            for s in sources
+        )
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT_EN},
+            {"role": "user", "content": f"[Segments]\n{seg_block}\n\n[Sources]\n{ev_block}{prev_block}"},
+        ]
+    else:
+        ev_block = "\n\n".join(f"[{s.n}] {s.label}\n{s.snippet}" for s in sources)
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"[세그먼트]\n{seg_block}\n\n[근거]\n{ev_block}{prev_block}"},
+        ]
     try:
         data = llm.chat_json(messages)
     except llm.LLMUnavailable as e:
@@ -176,6 +241,23 @@ def _review(text: str, as_of, top_k: int, extracted_by: str = "text") -> ReviewR
             citations=cites,
         ))
 
+    # 능동형 체크리스트 파싱
+    checklist: list[ChecklistItem] = []
+    for c in data.get("checklist", []):
+        if not isinstance(c, dict) or not c.get("title"):
+            continue
+        si = c.get("segment_index")
+        si = si if isinstance(si, int) and 0 <= si < len(segments) else None
+        checklist.append(ChecklistItem(
+            id=str(c.get("id") or f"item-{len(checklist) + 1}"),
+            title=c.get("title", ""),
+            reason=c.get("reason", ""),
+            status=c.get("status") if c.get("status") in ("todo", "ok", "risk", "na") else "todo",
+            change=c.get("change") if c.get("change") in ("added", "kept", "updated", "removed") else "added",
+            segment_index=si,
+            citations=[by_n[n] for n in c.get("citations", []) if n in by_n],
+        ))
+
     # before→after: 원문에서 위험 세그먼트를 대안 문구로 치환한 수정본
     revised = text
     for f in findings:
@@ -184,9 +266,10 @@ def _review(text: str, as_of, top_k: int, extracted_by: str = "text") -> ReviewR
 
     audit = "\n".join(f"{f.issue} {f.suggestion}" for f in findings)
     return ReviewResponse(original_text=text, revised_text=revised,
-                          segments=segments, findings=findings, extracted_by=extracted_by,
+                          segments=segments, findings=findings, checklist=checklist,
+                          extracted_by=extracted_by,
                           citation_check=_citation_check(audit, as_of),
-                          method=method, as_of=as_of)
+                          method=method, lang=lang, as_of=as_of)
 
 
 @router.post("/review", response_model=ReviewResponse, dependencies=[Depends(require_api_key)])
@@ -195,6 +278,8 @@ async def review(
     text: str | None = Form(default=None, description="PDF 대신 직접 입력하는 본문"),
     as_of: str | None = Form(default=None),
     top_k_per_segment: int = Form(default=4),
+    lang: str = Form(default="auto", description="응답 언어 auto|ko|en"),
+    prev_checklist: str = Form(default="", description="직전 checklist JSON 배열(능동형 재조정용)"),
 ):
     """PDF 업로드(file) 또는 텍스트(text) 중 하나로 문서 위험을 검토한다."""
     if file is not None:
@@ -204,5 +289,13 @@ async def review(
         body, extracted_by = text, "text"
     else:
         raise HTTPException(400, "file(PDF) 또는 text 중 하나를 제공하세요.")
+    prev = None
+    if prev_checklist.strip():
+        try:
+            prev = json.loads(prev_checklist)
+            if not isinstance(prev, list):
+                prev = None
+        except json.JSONDecodeError:
+            raise HTTPException(400, "prev_checklist 는 JSON 배열이어야 합니다.")
     top_k = max(1, min(8, top_k_per_segment))
-    return _review(body, as_of, top_k, extracted_by)
+    return _review(body, as_of, top_k, extracted_by, lang, prev)
