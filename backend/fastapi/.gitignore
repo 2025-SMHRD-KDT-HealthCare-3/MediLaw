@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.zip
+.env
+*.bak
+# 기획서 등 문서 초안은 git 제외 (law-app 관례)
+*.pdf
+*.pdf:Zone.Identifier
