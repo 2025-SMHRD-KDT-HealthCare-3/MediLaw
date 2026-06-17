@@ -122,7 +122,7 @@ data: {"type":"done","citation_check":{
              "clause_accurate":true,"valid_as_of":null,"verified":true,
              "trust_score":95,"status":"확인",
              "matched_label":"의료법 제56조","matched_source_url":"...","note":""}],
-  "summary":{"total":1,"verified":1,"failed":0,"avg_score":95},"as_of":null}}
+  "summary":{"total":1,"verified":1,"failed":0,"avg_score":95,"worst_status":"확인","min_score":95},"as_of":null}}
 ```
 에러 시 `{"type":"error","message":"..."}`. ⚠️ 브라우저 `EventSource`는 GET만 지원 → POST는 `fetch` + `ReadableStream`으로 직접 파싱.
 
@@ -267,19 +267,26 @@ curl -s -X POST localhost:8077/chat/checklist -H 'content-type: application/json
 AI 답변의 법령·판례 인용을 DB와 대조(존재·조문 정확성·판례 유효성·시점). `text`(자동 추출) 또는 `citations`(구조화) 중 하나 이상.
 
 **요청** `{"text":"의료법 제27조와 가짜 의료법 제999조","as_of":"2026-06-15"}`
-**응답** `{"output":[VerifyResult...],"summary":{"total":2,"verified":1,"failed":1,"avg_score":60},"as_of":"2026-06-15"}`
-`VerifyResult = {raw, type(statute|case|unknown), exists, clause_accurate, valid_as_of, verified, trust_score, status, matched_label, matched_source_url, note}`
+**응답** `{"output":[VerifyResult...],"summary":{...},"as_of":"2026-06-15"}`
+- `VerifyResult = {raw, type(statute|case|unknown), exists, clause_accurate, valid_as_of, verified, trust_score, status, matched_label, matched_source_url, note}`
+- `summary = {total, verified, failed, avg_score, worst_status, min_score}`
 
 **신뢰 점수(`trust_score` 0~100) + 상태(`status`)** — 기획서대로 수치와 3단계를 함께 출력:
 
 | status | trust_score | 의미 |
 |---|---|---|
-| `확인` | 85~100 | 존재·조문·시점 핵심검증 통과(미검증 항목만큼 소폭 감점: 시점 -5, 조문대조 불가 -10) |
-| `주의` | 60 | 존재하나 `as_of` 시점엔 미발효 / 그 이후 선고된 판례 |
-| `오류` | 0~25 | 법령·판례가 없음(0) 또는 조문 환각(25, 법령은 있으나 그 조문 없음) |
+| `확인` | 85~100 | 존재·조문(+항)·시점 핵심검증 통과. 감점: 시점 미검증 −5 / 조문대조 불가 −10 / **B등급 출처(행정규칙) −5** |
+| `주의` | 60~70 | 존재하나 `as_of` 시점엔 미발효(60)·구법 가능성(70) / 그 이후 선고 판례 / **법령명 매칭 모호(70)** |
+| `오류` | 0~25 | 법령·판례 없음(0) / 조문·**항(項) 환각**(25, 법령은 있으나 그 조·항이 없음) |
 
-`summary.avg_score` = 인용 전체 평균 신뢰점수. 이 검증은 `/chat`·`/documents/review` 응답의 `citation_check`에도 자동 내장.
-> 예: `의료법 제27조`→`확인 95` · 가짜 `제999조`→`오류 25` · `대법원 2006도9311`→`확인 85`.
+검증 4축에 더해진 신호:
+- **항(項) 단위 검증** — `제27조 제6항`처럼 존재하지 않는 항 인용도 환각(오류)으로 잡음(조문 본문의 ①~⑮ 대조).
+- **출처 등급** — 법률(A)보다 행정규칙·고시(B) 매칭은 권위가 낮아 −5(상태는 불변).
+- **모호 매칭** — 짧은 법령명이 긴 인용문에 헐겁게 매칭되면 `주의`(70)로 강등(정확 매칭은 영향 없음).
+- **구법 인용 교차검증**(개정 대시보드 `law_revisions` 연계) — `as_of` 시점에 다른(구) 버전이 시행 중이었으면 `주의`로 낮추고 "현행과 비교 권장" note. 시행예정 개정이 있으면 정보성 note 부착.
+
+`summary`: `avg_score`(평균) 외에 **`worst_status`/`min_score`** 제공 — 평균이 희석하는 "오류 1건이라도 있는지"를 바로 노출. 이 검증은 `/chat`·`/documents/review`의 `citation_check`에도 자동 내장.
+> 예: `의료법 제27조`→`확인 95` · `제27조 제6항`(없는 항)→`오류 25` · 가짜 `제999조`→`오류 25` · `대법원 2006도9311`→`확인 85`.
 
 ---
 
