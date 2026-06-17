@@ -1,11 +1,26 @@
 # MediLaw API (FastAPI)
 
-[lawbot.org](https://lawbot.org/)의 4대 기능을 의료 4법령 도메인으로 구현한 백엔드.
-대상 법령: **의료법 · 개인정보 보호법 · 생명윤리법 · 정보통신망법** + 보건의료 행정규칙·판례.
+의료·헬스케어 사업자를 위한 **의료법 컴플라이언스 AI 백엔드**. [lawbot.org](https://lawbot.org/) 4대 기능(RAG·Source Pack·Citation Firewall·MCP)을 엔진으로, **기획서 6대 핵심 기능**을 의료 4법령 도메인에 구현했다.
+대상 법령: **의료법 · 개인정보 보호법 · 생명윤리법 · 정보통신망법** + 보건의료 행정규칙·판례·해석례·가이드라인.
+스택: FastAPI + SQLite(FTS5 + sqlite-vec) + OpenAI(gpt-5.5 생성, text-embedding-3-small 임베딩) + 법제처 Open API.
 
 > ⚠️ 작업 제1원칙: 이 디렉토리(`backend/fastapi`) 안에서만 작업 (`CLAUDE.md` 참고).
+> 백엔드는 2개로 분리(기획서): **Node.js**(회원·세션·대화이력·MySQL·라우팅) + **이 FastAPI**(AI·RAG·검증·법령). 프론트(React)·시각화 UI·Node는 이 디렉토리 밖.
 
-## 구현 현황
+## 기획서 6대 핵심 기능 → 구현 매핑 (한눈에)
+
+| # | 기획서 핵심 기능 | 구현 엔드포인트 | 상태 |
+|---|---|---|---|
+| ① | AI 질의응답 챗봇(RAG) | `POST /chat/stream`(SSE) · `POST /chat` | ✅ |
+| ② | PDF 문서 분석(능동형 에디터) | `POST /documents/review` (before/after + 비전 OCR) | ✅ |
+| ③ | Citation Verification(환각 방지) | `POST /v1/verify` (+ ①②④에 자동 내장) | ✅ |
+| ④ | 능동형 체크리스트 | `POST /chat/checklist`(대화 기반) · `/documents/review`(문서 기반) | ✅ |
+| ⑤ | 법령 개정 현황 대시보드 | `GET /v1/laws/revisions · /{law_id}/revisions · /diff` (법제처 API) | ✅ |
+| ⑥ | 해외기업용 영어 입력 | `lang=en` (①②④ 공통 — 법령은 공식 영문) | ✅ |
+
+> **6대 기능 백엔드 전부 구현·라이브 검증 완료.** 남은 건 프론트엔드(React) UI뿐. 기능별 상세는 [API 엔드포인트 상세](#-api-엔드포인트-상세).
+
+## 구현 현황 (세부)
 
 - [x] **RAG API / Source Pack / Citation Firewall / MCP**(4도구) — lawbot 4대 기능
 - [x] **하이브리드 검색** FTS5 + OpenAI 임베딩(text-embedding-3-small, 512d) RRF, **sub-chunk**(대형 문서 분할)
@@ -42,7 +57,7 @@
 | 에이전트 | `/mcp/sse` | MCP 서버(4도구) — uvicorn에 마운트 |
 | 운영 | `GET /health`, `GET /` | 상태 점검 / 기능 인덱스(인증 없음) |
 
-> **프론트(React)는 🟢 두 개만 호출**하면 됩니다. 나머지 `/v1/*`는 이 두 엔드포인트가 내부에서 호출하는 코어이자, MCP/외부 에이전트용 표면입니다. → [엔드유저 vs 코어](#엔드유저2개-vs-코어-구분)
+> **프론트(React)는 🟢 표시 + 대시보드 `/v1/laws/*`만 호출**하면 됩니다. 코어 `/v1/{retrieve,source-pack,verify,statutes}`는 🟢 엔드포인트가 내부에서 호출하는 공유 엔진이자 MCP/외부 에이전트용 표면입니다(프론트가 직접 부를 필요 없음). → [엔드유저 vs 코어](#엔드유저2개-vs-코어-구분)
 
 ---
 
@@ -62,9 +77,13 @@
 | 8 | 능동형 체크리스트 | `prev_checklist` 재전달 | `change`(added/kept/removed)·`checklist_summary` 갱신 |
 | 9 | 영어 입력 | `POST /chat {"question":"...","lang":"en"}` | 영어 답변, 법령은 `is_official_en:true` |
 | 10 | MCP 서버 | `GET /health` | `mcp_mounted:true` (도구 4) |
+| 11 | 대화 종료 체크리스트 | `POST /chat/checklist {"history":[...]}` | `checklist[]`(근거 인용) + `search_queries` |
+| 12 | 개정 대시보드 | `GET /v1/laws/revisions` | 4대 법령 현행·시행예정·연혁 |
+| 13 | 개정 전후 비교 | `GET /v1/laws/diff?law_id=001788&from=20200328&to=20260407` | `changed`>0, 조문 before/after |
 
-> ✅ **검증 완료 (2026-06-16)** — 기능별 에이전트 7개로 라이브 확인, 전 항목 **PASS**.
-> RAG(method=hybrid) · Source Pack(마크다운+citations) · Citation Firewall(제27조 verified/제999조 failed) · 챗봇(답변+인용, 후속질문 standalone 재작성) · PDF 에디터(findings+before/after+체크리스트 재조정) · 영어 입력(`articles_en` 910행, `MEDICAL SERVICE ACT Article 27` 공식 영문 부착) · MCP(도구 4 + `/mcp` 마운트).
+> ✅ **검증 완료** — 전 기능 로컬 라이브 호출로 PASS.
+> ①~⑥ 기획서 기능 + 코어/MCP: RAG(method=hybrid) · Citation Firewall(제27조 verified/제999조 failed) · 챗봇(인용+후속질문 standalone 재작성) · PDF 에디터(before/after+체크리스트) · 영어 입력(공식 영문 부착) · **대화 체크리스트**(근거 기반 8항목) · **개정 대시보드**(법제처 4법령 197버전, 의료법 2020→2026 41조문 diff) · MCP(도구 4).
+> 성능 실측은 [성능](#성능-실측) 참고(`REASONING_EFFORT=low` 적용 — 챗봇 완답 ~4.3s).
 
 ## 📖 API 엔드포인트 상세
 
@@ -303,11 +322,14 @@ curl 'localhost:8077/v1/laws/diff?law_id=001788&from=20200328&to=20260407'
 ### 엔드유저(2개) vs 코어 구분
 
 ```
-POST /chat/stream     ─┐ 내부에서
-POST /documents/review ─┴─▶ hybrid_search(/v1/retrieve 코어) + extract_and_verify(/v1/verify 코어) 호출
+POST /chat/stream      ─┐
+POST /documents/review  ┤ 내부에서
+POST /chat/checklist   ─┴─▶ hybrid_search(/v1/retrieve 코어) + extract_and_verify(/v1/verify 코어) 호출
+GET  /v1/laws/*         ───▶ 법제처 Open API(별도 계열, RAG 코어 안 씀)
 ```
-- **React 프론트**: `/chat/stream`, `/documents/review` **2개만** 호출.
-- `/v1/*`(retrieve·source-pack·verify·statutes/search): 위 둘이 쓰는 **공유 코어**이자 **MCP·외부 에이전트용 API**. 프론트가 직접 부를 필요 없음(지우면 챗봇·에디터가 함께 죽음).
+- **React 프론트가 호출**: 🟢 `/chat/stream` · `/documents/review` · `/chat/checklist` + 대시보드 `/v1/laws/*`.
+- `/v1/{retrieve,source-pack,verify,statutes/search}`: 위 🟢 들이 쓰는 **공유 코어**이자 **MCP·외부 에이전트용 API**. 프론트가 직접 부를 필요 없음(지우면 챗봇·에디터가 함께 죽음).
+- `/v1/laws/*`(대시보드)는 RAG 코어가 아니라 **법제처 Open API**를 직접 호출하는 별도 계열.
 
 ---
 
@@ -572,3 +594,4 @@ MCP는 별도 프로세스가 아니라 **FastAPI 앱(`app/main.py`)에 `/mcp` S
 - 해석례(expc)·결정문(ppc)은 기본 DB엔 소량(검증분)만 → 필요 시 대량 수집.
 - 같은 문서가 포맷(hwpx vs pdf)이 달라 추출 텍스트가 다르면 dedup이 못 잡음(내용은 거의 동일).
 - 임베딩 빌드 전에는 FTS 전용이라 구어체 의미검색이 약함(빌드하면 해소).
+- **개정 대시보드(`/v1/laws/*`)**: `LAW_OC` 키는 호출 **IP/도메인 등록** 필요(미등록 시 `503`/HTML). 법제처 `target=lsHistory`(연혁 전용)는 이 키로 막혀 `target=eflaw`(시행일 법령, 연혁+현행+시행예정 포함)로 우회 — 시행일 지정 조문(`efYd`)까지 돼 개정 전후 비교에 더 적합. 대시보드 **시각화 UI는 프론트/Node 몫**(이 백엔드는 데이터·비교 API만).
