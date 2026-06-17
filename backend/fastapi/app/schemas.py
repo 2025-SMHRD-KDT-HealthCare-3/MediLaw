@@ -214,3 +214,60 @@ class ChecklistResponse(BaseModel):
     method: str = "hybrid"
     lang: str = Field("ko", description="실제 응답 언어")
     as_of: Optional[str] = None
+
+
+# ---------- /v1/laws/* (법령 개정 현황 대시보드) ----------
+class LawRevision(BaseModel):
+    mst: str = Field(description="법령일련번호(버전 조회 키)")
+    effective_on: Optional[str] = Field(None, description="시행일 YYYY-MM-DD")
+    promulgated_on: Optional[str] = Field(None, description="공포일 YYYY-MM-DD")
+    promulgation_no: str = ""
+    revision_type: str = Field("", description="제개정구분(일부개정/타법개정/제정 등)")
+    status: str = Field("", description="시행예정 | 현행 | 연혁")
+    reason: str = Field("", description="제개정이유(주로 현행 버전)")
+    detail_url: str = ""
+
+
+class LawStatus(BaseModel):
+    law_id: str
+    name: str
+    ministry: str = ""
+    current: Optional[LawRevision] = Field(None, description="현행 버전")
+    upcoming: list[LawRevision] = Field(default_factory=list, description="시행예정(앞으로 바뀔 조항)")
+    history_count: int = Field(0, description="연혁(과거 개정) 수")
+    latest_effective_on: Optional[str] = None
+
+
+class LawRevisionsResponse(BaseModel):
+    """대시보드 메인 — 추적 법령별 개정 현황 요약."""
+    laws: list[LawStatus]
+    tracked: int = 0
+    synced_at: Optional[str] = Field(None, description="마지막 배치 동기화 시각(없으면 미동기화)")
+    source: str = "법제처 국가법령정보 공동활용"
+
+
+class LawTimelineResponse(BaseModel):
+    """특정 법령 전체 개정 이력 타임라인."""
+    law_id: str
+    name: str
+    revisions: list[LawRevision]
+
+
+class ArticleDiff(BaseModel):
+    article_no: str
+    article_title: str = ""
+    change: Literal["added", "removed", "changed"]
+    before: str = Field("", description="개정 전 조문(removed/changed)")
+    after: str = Field("", description="개정 후 조문(added/changed)")
+
+
+class LawDiffResponse(BaseModel):
+    """개정 전후 조문 비교표."""
+    law_id: str
+    name: str = ""
+    from_effective_on: Optional[str] = Field(None, description="비교 기준(이전) 시행일")
+    to_effective_on: Optional[str] = Field(None, description="비교 대상(이후) 시행일")
+    added: int = 0
+    removed: int = 0
+    changed: int = 0
+    diffs: list[ArticleDiff] = Field(default_factory=list)

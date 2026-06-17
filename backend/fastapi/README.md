@@ -17,8 +17,9 @@
 - [x] **챗봇 멀티턴 기억** — `/chat`·`/chat/stream`이 `history[]`(이전 대화) 수신(무상태, 클라이언트 보관)
 - [x] **능동형 체크리스트** — `/documents/review`가 "확인 필요 항목" 생성 + `prev_checklist` 대조로 추가/삭제/유지
 - [x] **대화 종료 후 체크리스트** `POST /chat/checklist` — '체크리스트 생성' 버튼: 전체 대화 → 법적 쟁점 추출 → RAG 근거검색 → 법적 대응 체크리스트 생성
+- [x] **법령 개정 현황 대시보드** `GET /v1/laws/*` — 법제처 데이터로 4대 법령 개정 타임라인(현행·시행예정·연혁) + **개정 전후 조문 비교**(before/after) + 1일 1회 배치 동기화
 - [x] **프론트 연동 준비** — CORS 허용(`CORS_ORIGINS`) + React용 `fetch` SSE·multipart 예제([프론트 연동](#프론트-연동-react))
-- [ ] 프론트엔드(React 챗 UI) — 미구현(이 백엔드 API를 호출만 하면 됨)
+- [ ] 프론트엔드(React 챗 UI·대시보드 UI) — 미구현(이 백엔드 API를 호출만 하면 됨)
 
 ## API 한눈에 보기
 
@@ -35,6 +36,9 @@
 | 코어 | `POST /v1/source-pack` | LLM 인용용 근거 마크다운 번들 |
 | 코어 | `POST /v1/verify` | Citation Firewall(인용 검증) |
 | 코어 | `GET /v1/statutes/search` | 법령 검색(lawbot 호환) |
+| 대시보드 | `GET /v1/laws/revisions` | 4대 법령 개정 현황(현행·시행예정·연혁) |
+| 대시보드 | `GET /v1/laws/{law_id}/revisions` | 한 법령 개정 이력 타임라인 |
+| 대시보드 | `GET /v1/laws/diff` | 개정 전후 조문 비교표(before/after) |
 | 에이전트 | `/mcp/sse` | MCP 서버(4도구) — uvicorn에 마운트 |
 | 운영 | `GET /health`, `GET /` | 상태 점검 / 기능 인덱스(인증 없음) |
 
@@ -257,9 +261,42 @@ curl 'localhost:8077/v1/statutes/search?q=의료광고&limit=10'
 
 ---
 
+### 6-B. `GET /v1/laws/*` — 법령 개정 현황 대시보드
+
+법제처 국가법령정보 공동활용 데이터로 **4대 법령**(의료법·개인정보보호법·생명윤리법·정보통신망법)의 개정 타임라인을 추적. 구법 인용 리스크를 줄이는 게 목적(기획서 ⑤).
+
+**데이터 적재(배치)** — `scripts/sync_revisions.py`를 1일 1회 cron으로. 각 법령의 전 버전(시행예정/현행/연혁)을 `law_revisions`에 idempotent upsert. 미동기화 상태로 API를 처음 부르면 라이브로 자동 부트스트랩.
+```bash
+LAW_OC=<발급키> DB_PATH=data/medilaw.db python scripts/sync_revisions.py            # 4대 법령
+LAW_OC=<발급키> python scripts/sync_revisions.py --subordinate                       # +시행령·시행규칙
+# cron 예: 30 4 * * * cd .../backend/fastapi && DB_PATH=data/medilaw.db python scripts/sync_revisions.py
+```
+> ⚠️ `LAW_OC` 키는 호출 **IP/도메인이 법제처에 등록**돼 있어야 응답함(미등록 시 HTML 에러 → `503`).
+
+**① `GET /v1/laws/revisions`** — 대시보드 메인. 법령별 현행·시행예정·연혁 요약.
+```jsonc
+{ "laws": [{
+    "law_id": "001788", "name": "의료법", "ministry": "보건복지부",
+    "current": {"mst":"285327","effective_on":"2026-04-07","revision_type":"일부개정","reason":"[일부개정] ◇ 개정이유 ..."},
+    "upcoming": [{"effective_on":"2026-09-11","revision_type":"타법개정","mst":"283899"}],  // ⚠ 앞으로 바뀔 조항
+    "history_count": 87, "latest_effective_on": "2026-04-07"
+  }], "tracked": 4, "synced_at": "2026-06-17T00:50:28+00:00" }
+```
+
+**② `GET /v1/laws/{law_id}/revisions`** — 한 법령 전체 개정 이력(시행일 내림차순, 각 버전의 `mst`·`effective_on`·`revision_type`·`status`).
+
+**③ `GET /v1/laws/diff?law_id=&from=&to=`** — **개정 전후 조문 비교**. `from`/`to`는 ②의 `effective_on`(YYYYMMDD). 두 버전 조문을 받아 추가/삭제/변경 조문을 before/after로 반환(첫 호출만 법제처 조회 ~5s, 이후 캐시).
+```bash
+# 의료법 2020-03-28 → 현행 2026-04-07 (41개 조문 변경)
+curl 'localhost:8077/v1/laws/diff?law_id=001788&from=20200328&to=20260407'
+# → {added, removed, changed, diffs:[{article_no:"2", change:"changed", before:"...", after:"...「간호법」에 따른..."}]}
+```
+
+---
+
 ### 7. `GET /health`, `GET /` — 운영 (인증 없음)
 
-`/health` → `{status, db_path, db_exists, db_size_mb, embeddings_ready, vec_extension, auth_enabled, mcp_mounted}`. `/` → 기능 인덱스.
+`/health` → `{status, db_path, db_exists, db_size_mb, embeddings_ready, vec_extension, revisions_ready, auth_enabled, mcp_mounted}`. `/` → 기능 인덱스.
 
 ---
 
@@ -360,16 +397,19 @@ app/
     retrieve.py     POST /v1/retrieve, GET /v1/statutes/search
     source_pack.py  POST /v1/source-pack
     verify.py       POST /v1/verify
-    chat.py         POST /chat, POST /chat/stream (gpt-5.5 RAG 챗봇)
+    chat.py         POST /chat, POST /chat/stream, POST /chat/checklist (gpt-5.5 RAG 챗봇·체크리스트)
     documents.py    POST /documents/review (PDF→위험검토→before/after, 비전 OCR fallback)
+    laws.py         GET /v1/laws/revisions·{law_id}/revisions·diff (법령 개정 현황 대시보드)
   llm.py          OpenAI gpt-5.5 래퍼 (chat / chat_stream / chat_json / ocr_image / translate)
   english.py      영어 입력 지원: 언어감지 + 공식 영문 법령(articles_en) 조회
+  lawapi.py       법제처 DRF 클라이언트(개정 연혁/버전·조문) + law_revisions 동기화·캐시
 scripts/
   ingest_api.py        법제처 Open API → law/prec/admrul/expc/ppc 누적 수집(코퍼스 확장)
   ingest_guidelines.py 보건복지부 통합검색/게시판 → 가이드라인 PDF/HWPX/HWP 추출 → documents(guideline)
   dedup_documents.py   documents 본문 중복 제거(idempotent)
   build_embeddings.py  articles+cases+documents → chunks(+sqlite-vec) 임베딩 (incremental/rebuild)
   ingest_elaw.py       법제처 영문법령 API(target=elaw) → articles_en (영어 입력용 공식 영문)
+  sync_revisions.py    법제처 → law_revisions 개정 타임라인 동기화(1일 1회 배치, 대시보드용)
 mcp_server/
   server.py      MCP 서버 (retrieve/source_pack/verify/statutes_search 도구)
 data/

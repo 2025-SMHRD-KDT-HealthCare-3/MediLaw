@@ -38,3 +38,15 @@ RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "30"))
 
 # 검색 가능한 출처 종류
 SOURCE_TYPES = ("statute", "case", "interpretation")
+
+# 법제처 국가법령정보 공동활용 OC 키 — 법령 개정 현황(연혁/버전) 조회용.
+# 호출 IP/도메인이 등록돼 있어야 응답함(미등록 시 HTML 에러).
+LAW_OC = os.environ.get("LAW_OC", "H-Lab")
+
+# 개정 현황 대시보드가 추적하는 핵심 법령(기획서 4대 법령).
+TRACKED_LAWS = [
+    "의료법",
+    "개인정보 보호법",
+    "생명윤리 및 안전에 관한 법률",
+    "정보통신망 이용촉진 및 정보보호 등에 관한 법률",
+]
