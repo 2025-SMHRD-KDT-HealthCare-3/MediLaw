@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from app import llm
 from app.auth import require_api_key
-from app.citations import extract_and_verify
+from app.citations import extract_and_verify, summarize
 from app.english import detect_lang, english_article
 from app.rag import hybrid_search
 from app.schemas import (
@@ -24,7 +24,6 @@ from app.schemas import (
     ReviewFinding,
     ReviewResponse,
     VerifyResponse,
-    VerifySummary,
 )
 
 router = APIRouter(prefix="/documents", tags=["능동형 PDF 에디터"])
@@ -175,12 +174,7 @@ def _gather_evidence(segments: list[str], top_k: int, as_of, lang: str = "ko"):
 
 def _citation_check(text: str, as_of) -> VerifyResponse:
     results = extract_and_verify(text, as_of)
-    verified = sum(1 for r in results if r.verified)
-    return VerifyResponse(
-        output=results,
-        summary=VerifySummary(total=len(results), verified=verified, failed=len(results) - verified),
-        as_of=as_of,
-    )
+    return VerifyResponse(output=results, summary=summarize(results), as_of=as_of)
 
 
 def _review(text: str, as_of, top_k: int, extracted_by: str = "text",
