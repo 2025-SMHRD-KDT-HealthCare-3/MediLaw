@@ -1,6 +1,10 @@
 import cors from 'cors'
+import cookieParser from 'cookie-parser'
 import express from 'express'
+import rateLimit from 'express-rate-limit'
+import helmet from 'helmet'
 import { createProxyMiddleware } from 'http-proxy-middleware'
+import morgan from 'morgan'
 import 'dotenv/config'
 
 const app = express()
@@ -8,13 +12,41 @@ const PORT = process.env.PORT ?? 4000
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173'
 const FASTAPI_TARGET = process.env.FASTAPI_TARGET ?? 'http://127.0.0.1:8000'
 const PRODUCT_API_TARGET = process.env.PRODUCT_API_TARGET ?? 'http://127.0.0.1:8001'
+const PROD = process.env.NODE_ENV === 'production'
 
+const proxyErrorHandler = (err: any, req: any, res: any) => {
+  console.error('[proxy-error]', err?.code, req?.url)
+  if (res?.headersSent) return
+
+  const statusCode = err?.code === 'ECONNREFUSED' ? 503 : 504
+  const payload = {
+    error: {
+      code: `UPSTREAM_${err?.code ?? 'ERROR'}`,
+      message: '백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.',
+    },
+  }
+
+  if (typeof res?.status === 'function' && typeof res?.json === 'function') {
+    res.status(statusCode).json(payload)
+    return
+  }
+
+  if (typeof res?.writeHead === 'function' && typeof res?.end === 'function') {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify(payload))
+  }
+}
+
+app.set('trust proxy', 1)
+app.use(helmet())
 app.use(
   cors({
     origin: FRONTEND_ORIGIN,
     credentials: true,
   }),
 )
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'))
+app.use(cookieParser())
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -27,6 +59,68 @@ app.get('/api/health', (_req, res) => {
   })
 })
 
+app.post('/api/auth/login', express.json(), async (req, res) => {
+  try {
+    const upstream = await fetch(`${PRODUCT_API_TARGET}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body),
+    })
+    const data: any = await upstream.json().catch(() => ({}))
+    const token = data?.data?.access_token ?? data?.access_token
+
+    if (upstream.ok && token) {
+      res.cookie('session', token, {
+        httpOnly: true,
+        secure: PROD,
+        sameSite: 'lax',
+        maxAge: 3_600_000,
+        path: '/',
+      })
+
+      if (data?.data?.access_token) delete data.data.access_token
+      if (data?.access_token) delete data.access_token
+    }
+
+    res.status(upstream.status).json(data)
+  } catch (err: any) {
+    const errorCode = err?.code ?? err?.cause?.code
+    console.error('[auth-login-error]', errorCode, err?.message)
+    res.status(errorCode === 'ECONNREFUSED' ? 503 : 504).json({
+      error: {
+        code: `UPSTREAM_${errorCode ?? 'ERROR'}`,
+        message: '백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.',
+      },
+    })
+  }
+})
+
+app.post('/api/auth/logout', (_req, res) => {
+  res.clearCookie('session', { path: '/' })
+  res.json({ ok: true })
+})
+
+app.use(
+  '/api/rag',
+  rateLimit({
+    windowMs: 60_000,
+    limit: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+  }),
+)
+
+app.use(
+  '/api',
+  rateLimit({
+    windowMs: 60_000,
+    limit: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => req.path.startsWith('/rag'),
+  }),
+)
+
 app.use(
   '/api/rag',
   createProxyMiddleware({
@@ -36,6 +130,9 @@ app.use(
     proxyTimeout: 0,
     timeout: 0,
     logger: console,
+    on: {
+      error: proxyErrorHandler,
+    },
   }),
 )
 
@@ -49,11 +146,48 @@ app.use(
     timeout: 0,
     pathRewrite: (path) => `/api${path}`,
     logger: console,
+    on: {
+      proxyReq: (proxyReq: any, req: any) => {
+        const token = req.cookies?.session
+        if (token) proxyReq.setHeader('Authorization', `Bearer ${token}`)
+      },
+      error: proxyErrorHandler,
+    },
   }),
 )
 
-app.listen(PORT, () => {
+app.use((_req, res) => {
+  res.status(404).json({ error: { code: 'NOT_FOUND', message: '경로 없음' } })
+})
+
+app.use((err: any, _req: any, res: any, _next: any) => {
+  console.error('[error]', err)
+  if (res.headersSent) return
+
+  res.status(err.status || 500).json({
+    error: {
+      code: 'INTERNAL',
+      message: process.env.NODE_ENV === 'production' ? '서버 오류' : String(err?.message ?? err),
+    },
+  })
+})
+
+const server = app.listen(PORT, () => {
   console.log(`[node-bridge] http://localhost:${PORT}`)
   console.log(`[node-bridge] /api/rag/* -> ${FASTAPI_TARGET}`)
   console.log(`[node-bridge] /api/* -> ${PRODUCT_API_TARGET}`)
 })
+
+process.on('unhandledRejection', (err) => {
+  console.error('[unhandledRejection]', err)
+})
+
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err)
+})
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => {
+    server.close(() => process.exit(0))
+  })
+}
