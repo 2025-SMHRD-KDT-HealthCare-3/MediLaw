@@ -191,3 +191,26 @@ class ReviewResponse(BaseModel):
     method: str = "hybrid"
     lang: str = Field("ko", description="실제 응답 언어")
     as_of: Optional[str] = None
+
+
+# ---------- /chat/checklist (대화 종료 후 능동형 체크리스트) ----------
+class ChecklistRequest(BaseModel):
+    """'체크리스트 생성' 버튼 — 그동안의 전체 대화로 법적 대응 체크리스트를 만든다."""
+    history: list[ChatTurn] = Field(description="전체 대화(무상태 — 클라이언트가 보관·전달)")
+    top_k: int = Field(6, ge=1, le=20, description="쟁점별 근거 검색 개수")
+    max_topics: int = Field(5, ge=1, le=8, description="대화에서 추출할 법적 쟁점 수")
+    as_of: Optional[str] = None
+    lang: Lang = Field("auto", description="응답 언어. auto=대화 언어 자동감지")
+    prev_checklist: Optional[list[dict]] = Field(
+        None, description="직전 checklist(재생성 시 사용자 status/note 보존)")
+
+
+class ChecklistResponse(BaseModel):
+    checklist: list[ChecklistItem] = Field(default_factory=list, description="법적 대응 확인목록")
+    checklist_summary: ChecklistSummary = Field(default_factory=ChecklistSummary, description="상태별 항목 수")
+    sources: list[ChatSource] = Field(default_factory=list, description="체크리스트 근거로 RAG 검색된 자료")
+    search_queries: list[str] = Field(default_factory=list, description="대화에서 추출해 검색에 사용한 쟁점 질의")
+    citation_check: VerifyResponse = Field(description="체크리스트 인용의 Citation Firewall 검증")
+    method: str = "hybrid"
+    lang: str = Field("ko", description="실제 응답 언어")
+    as_of: Optional[str] = None
