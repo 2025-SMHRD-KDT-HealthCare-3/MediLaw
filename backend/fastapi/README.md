@@ -33,7 +33,7 @@
 - [x] **능동형 체크리스트** — `/documents/review`가 "확인 필요 항목" 생성 + `prev_checklist` 대조로 추가/삭제/유지
 - [x] **대화 종료 후 체크리스트** `POST /chat/checklist` — '체크리스트 생성' 버튼: 전체 대화 → 법적 쟁점 추출 → RAG 근거검색 → 법적 대응 체크리스트 생성
 - [x] **법령 개정 현황 대시보드** `GET /v1/laws/*` — 법제처 데이터로 4대 법령 개정 타임라인(현행·시행예정·연혁) + **개정 전후 조문 비교**(before/after) + 1일 1회 배치 동기화
-- [x] **프론트 연동 준비** — CORS 허용(`CORS_ORIGINS`) + React용 `fetch` SSE·multipart 예제([프론트 연동](#프론트-연동-react))
+- [x] **Node 연동 준비** — Node(메인)→FastAPI 서버-서버 호출 구조(CORS 불필요) + `fetch` SSE·multipart [호출 예제](#node-호출-예제)
 - [ ] 프론트엔드(React 챗 UI·대시보드 UI) — 미구현(이 백엔드 API를 호출만 하면 됨)
 
 ## API 한눈에 보기
@@ -348,15 +348,11 @@ x-api-key: <발급키>
 | 429 | 분당 호출 한도 초과 |
 | 503 | `OPENAI_API_KEY` 미설정 등 LLM 사용 불가(`/chat`·`/documents/review`) |
 
-**CORS** — 브라우저 프론트가 직접 호출하므로 CORS 허용됨. 기본 `*`(개발용), 배포 시 `CORS_ORIGINS`로 좁힘:
-```
-CORS_ORIGINS=https://app.example.com,http://localhost:5173
-```
-인증을 쿠키가 아니라 `x-api-key` 헤더로 하므로 `allow_credentials=false` → origin `*`도 안전.
+**호출 구조** — `React(브라우저) → Node(메인) → 이 FastAPI(AI)`. 프론트는 이 서버를 직접 부르지 않고 **Node가 서버-서버로 호출**한다. 그래서 CORS(브라우저 전용 규칙)는 불필요(미설정). Node는 아래 엔드포인트를 일반 HTTP로 호출하고, 인증을 켜면 `x-api-key` 헤더만 실으면 된다.
 
-## 프론트 연동 (React)
+## Node 호출 예제
 
-프론트가 호출하는 건 🟢 **2개뿐**(`/chat/stream`, `/documents/review`). 아래 두 스니펫이면 끝.
+Node가 호출하는 🟢 엔드포인트(`/chat/stream`, `/documents/review`, `/chat/checklist`)의 호출 형태. 아래 `fetch` 스니펫은 Node(서버)에서 그대로 쓰며, 스트리밍은 Node가 받아 브라우저로 중계(passthrough)한다.
 
 **① 챗봇 (SSE 스트리밍)** — `EventSource`는 GET만 되므로 POST는 `fetch` + `ReadableStream`으로 직접 파싱:
 ```js
@@ -586,7 +582,7 @@ MCP는 별도 프로세스가 아니라 **FastAPI 앱(`app/main.py`)에 `/mcp` S
 
 `Dockerfile` 로 컨테이너화. DB는 git/도커 제외 → 볼륨에 업로드 후 `DB_PATH=/app/data/medilaw.db` 설정,
 `OPENAI_API_KEY` 등은 env로. (`railway.toml` 은 제거함 — 이 디렉토리 단독 자동배포 안 함.)
-배포 시 `CORS_ORIGINS`를 실제 프론트 도메인으로 좁히고(`*` 금지), 공개면 `API_KEYS`를 설정.
+이 서버는 Node(메인 백엔드)만 호출하므로 외부에 직접 노출하지 말 것(내부망/방화벽). 공개해야 하면 `API_KEYS`로 보호.
 
 ## 알려진 공백
 
