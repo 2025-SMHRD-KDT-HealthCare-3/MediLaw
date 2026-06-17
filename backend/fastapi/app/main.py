@@ -8,10 +8,11 @@
 import os
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import API_KEYS, DB_PATH
+from app.config import API_KEYS, CORS_ORIGINS, DB_PATH
 from app.db import has_embeddings, vec_loaded
-from app.routers import chat, documents, retrieve, source_pack, verify
+from app.routers import chat, documents, laws, retrieve, source_pack, verify
 
 app = FastAPI(
     title="MediLaw API — 의료법 RAG · Source Pack · Citation Firewall",
@@ -19,11 +20,22 @@ app = FastAPI(
     description="lawbot.org 호환 의료법 컴플라이언스 API (의료법·개인정보보호법·생명윤리법·정보통신망법)",
 )
 
+# CORS — React 등 브라우저 프론트가 직접 호출(POST /chat/stream, /documents/review).
+# 인증은 x-api-key 헤더라 쿠키를 안 써서 origin "*"도 안전. 배포 시 CORS_ORIGINS로 좁히세요.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(retrieve.router)
 app.include_router(source_pack.router)
 app.include_router(verify.router)
 app.include_router(chat.router)
 app.include_router(documents.router)
+app.include_router(laws.router)
 
 # 기능 4 — MCP Server 를 같은 uvicorn 위에 마운트(/mcp SSE).
 # LLM(Claude/Cursor)이 별도 프로세스 없이 이 URL로 바로 도구를 사용.
@@ -44,6 +56,13 @@ except Exception as _e:  # noqa: BLE001
 
 @app.get("/health")
 def health():
+    try:
+        from app import lawapi
+        from app.db import db
+
+        revisions_ready = lawapi.has_revisions(db())
+    except Exception:  # noqa: BLE001
+        revisions_ready = False
     return {
         "status": "ok",
         "db_path": DB_PATH,
@@ -53,6 +72,7 @@ def health():
         else 0,
         "embeddings_ready": has_embeddings(),
         "vec_extension": vec_loaded(),
+        "revisions_ready": revisions_ready,
         "auth_enabled": bool(API_KEYS),
         "mcp_mounted": MCP_MOUNTED,
     }
@@ -65,10 +85,12 @@ def index():
         "features": {
             "chat": "POST /chat , POST /chat/stream(SSE)",
             "document_review": "POST /documents/review (PDF 업로드 위험 검토)",
+            "chat_checklist": "POST /chat/checklist (대화 종료 후 법적 대응 체크리스트)",
             "rag": "POST /v1/retrieve",
             "source_pack": "POST /v1/source-pack",
             "citation_firewall": "POST /v1/verify",
             "statutes_search": "GET /v1/statutes/search",
+            "law_revisions": "GET /v1/laws/revisions , GET /v1/laws/{law_id}/revisions , GET /v1/laws/diff",
             "mcp_server": "/mcp/sse (마운트됨)" if MCP_MOUNTED else "python -m mcp_server.server (stdio)",
         },
         "docs": "/docs",

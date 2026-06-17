@@ -2,7 +2,7 @@
 import json
 from collections.abc import Iterator
 
-from app.config import CHAT_MODEL, OPENAI_API_KEY
+from app.config import CHAT_MODEL, OPENAI_API_KEY, REASONING_EFFORT
 
 
 class LLMUnavailable(RuntimeError):
@@ -17,9 +17,13 @@ def _client():
     return OpenAI(api_key=OPENAI_API_KEY)
 
 
+# 모든 생성 호출 공통 옵션 — 추론 강도 낮춰 지연 단축(REASONING_EFFORT 빈값이면 미전달).
+_GEN_OPTS = {"reasoning_effort": REASONING_EFFORT} if REASONING_EFFORT else {}
+
+
 def chat(messages: list[dict]) -> str:
     """단발 생성. 답변 텍스트 반환."""
-    resp = _client().chat.completions.create(model=CHAT_MODEL, messages=messages)
+    resp = _client().chat.completions.create(model=CHAT_MODEL, messages=messages, **_GEN_OPTS)
     return resp.choices[0].message.content or ""
 
 
@@ -31,7 +35,7 @@ def chat_json(messages: list[dict]) -> dict:
     """
     resp = _client().chat.completions.create(
         model=CHAT_MODEL, messages=messages,
-        response_format={"type": "json_object"},
+        response_format={"type": "json_object"}, **_GEN_OPTS,
     )
     content = resp.choices[0].message.content or "{}"
     try:
@@ -52,10 +56,38 @@ def translate(text: str, target: str = "ko") -> str:
                     f"Output only the translation, no quotes or explanation."},
                 {"role": "user", "content": text},
             ],
+            **_GEN_OPTS,
         )
         return (resp.choices[0].message.content or "").strip() or text
     except LLMUnavailable:
         return text
+
+
+def rewrite_query(history: list[dict], question: str) -> str:
+    """멀티턴 후속질문을 '독립 검색질의(한국어)'로 재작성.
+
+    "그럼 그건?" 같은 후속질문은 단독으론 검색이 안 되므로 대화 맥락을 합쳐
+    한국어 standalone 질의로 변환(검색 코퍼스가 한국어 → 영어 입력도 함께 해결).
+    이력 없음/실패 시 원문 반환(degradation).
+    """
+    if not history:
+        return question
+    convo = "\n".join(f"{t['role']}: {t['content']}" for t in history)
+    try:
+        resp = _client().chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[
+                {"role": "system", "content":
+                    "Given the conversation and a follow-up message, rewrite the follow-up as a single "
+                    "standalone search query in Korean that captures the full intent. "
+                    "Output only the query, no explanation."},
+                {"role": "user", "content": f"{convo}\n\nfollow-up: {question}"},
+            ],
+            **_GEN_OPTS,
+        )
+        return (resp.choices[0].message.content or "").strip() or question
+    except LLMUnavailable:
+        return question
 
 
 def ocr_image(b64_png: str) -> str:
@@ -73,6 +105,7 @@ def ocr_image(b64_png: str) -> str:
             {"type": "image_url",
              "image_url": {"url": f"data:image/png;base64,{b64_png}"}},
         ]}],
+        **_GEN_OPTS,
     )
     return resp.choices[0].message.content or ""
 
@@ -80,7 +113,7 @@ def ocr_image(b64_png: str) -> str:
 def chat_stream(messages: list[dict]) -> Iterator[str]:
     """토큰 스트리밍 (delta 텍스트만 yield)."""
     stream = _client().chat.completions.create(
-        model=CHAT_MODEL, messages=messages, stream=True
+        model=CHAT_MODEL, messages=messages, stream=True, **_GEN_OPTS
     )
     for chunk in stream:
         if not chunk.choices:
