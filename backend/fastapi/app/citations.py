@@ -94,7 +94,9 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
     valid_as_of = None
     if as_of:
         eff = s["effective_from"]
-        valid_as_of = bool(eff) and _compact(eff) <= _compact(as_of)
+        if eff:
+            valid_as_of = _compact(eff) <= _compact(as_of)
+        # eff 없으면 None 유지(시행일 데이터 없음 = 미검증, 미발효와 구별)
 
     verified = (
         clause_accurate is not False and valid_as_of is not False
@@ -129,7 +131,9 @@ def verify_case(case_no: str, raw: str, as_of: str | None) -> VerifyResult:
         )
     valid_as_of = None
     if as_of:
-        valid_as_of = bool(row["date"]) and _compact(row["date"]) <= _compact(as_of)
+        if row["date"]:
+            valid_as_of = _compact(row["date"]) <= _compact(as_of)
+        # 선고일 데이터 없으면 None 유지(미검증, 이후 선고와 구별)
     label = " ".join(filter(None, [row["court"], cn]))
     notes = []
     if valid_as_of is False:
