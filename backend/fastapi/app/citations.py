@@ -40,11 +40,15 @@ def _grade(exists: bool, clause_accurate, valid_as_of, trust_grade=None) -> tupl
 
 
 def summarize(results: list[VerifyResult]) -> VerifySummary:
-    """검증 결과 목록 → 요약(개수 + 평균 신뢰 점수)."""
+    """검증 결과 목록 → 요약(개수 + 평균/최저 점수 + 최악 상태)."""
     verified = sum(1 for r in results if r.verified)
     avg = round(sum(r.trust_score for r in results) / len(results)) if results else 0
+    order = {"확인": 0, "주의": 1, "오류": 2}
+    worst = max(results, key=lambda r: order[r.status]).status if results else "확인"
+    min_score = min((r.trust_score for r in results), default=100)
     return VerifySummary(
-        total=len(results), verified=verified, failed=len(results) - verified, avg_score=avg)
+        total=len(results), verified=verified, failed=len(results) - verified, avg_score=avg,
+        worst_status=worst, min_score=min_score)
 
 
 # 법령 인용: (법령명) 제N조(의M)?(제K항)?
