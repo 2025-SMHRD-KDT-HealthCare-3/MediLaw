@@ -91,6 +91,9 @@ class VerifySummary(BaseModel):
     verified: int
     failed: int
     avg_score: int = Field(0, ge=0, le=100, description="인용 전체 평균 신뢰 점수")
+    worst_status: Literal["확인", "주의", "오류"] = Field(
+        "확인", description="가장 나쁜 항목의 상태(오류>주의>확인)")
+    min_score: int = Field(100, ge=0, le=100, description="최저 신뢰 점수(가장 약한 인용)")
 
 
 class VerifyResponse(BaseModel):
