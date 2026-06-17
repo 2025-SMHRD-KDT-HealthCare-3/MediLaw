@@ -12,24 +12,31 @@ from app.db import db
 from app.schemas import CitationInput, VerifyResult, VerifySummary
 
 
-def _grade(exists: bool, clause_accurate, valid_as_of) -> tuple[int, str]:
+def _grade(exists: bool, clause_accurate, valid_as_of, trust_grade=None) -> tuple[int, str]:
     """검증 신호 → (신뢰 점수 0~100, 상태 확인|주의|오류).
 
     오류 = 존재하지 않거나 조문 불일치(환각). 주의 = 존재하나 그 시점엔 미발효/이후 선고.
     확인 = 핵심 검증 통과(미검증 항목만큼 소폭 감점).
+    trust_grade = 출처 등급('A' 권위 높음 / 'B' 행정규칙 등 낮음). 권위 차이는 환각이
+    아니므로 status는 바꾸지 않고 점수만 소폭 보정한다.
     """
     if not exists:
         return 0, "오류"
     if clause_accurate is False:            # 조문 환각(법령은 있으나 그 조문 없음)
         return 25, "오류"
     if valid_as_of is False:                # 존재하나 as_of 시점엔 미발효/이후 선고
-        return 60, "주의"
-    score = 100
-    if clause_accurate is None:             # 조문 단위 대조 못함(법령명만 인용/판례)
-        score -= 10
-    if valid_as_of is None:                 # 시점 미검증(as_of 미지정)
-        score -= 5
-    return score, "확인"
+        score, status = 60, "주의"
+    else:
+        score = 100
+        if clause_accurate is None:         # 조문 단위 대조 못함(법령명만 인용/판례)
+            score -= 10
+        if valid_as_of is None:             # 시점 미검증(as_of 미지정)
+            score -= 5
+        status = "확인"
+    # 출처 등급 보정: status는 유지, 낮은 권위(B)만 소폭 감점(최저 60).
+    if status != "오류" and trust_grade == "B":
+        score = max(60, score - 5)
+    return score, status
 
 
 def summarize(results: list[VerifyResult]) -> VerifySummary:
@@ -122,7 +129,7 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
         notes.append(f"제{article_no}조가 해당 법령에 존재하지 않음")
     if valid_as_of is False:
         notes.append(f"{as_of} 시점에 미발효(발효일 {s['effective_from']})")
-    score, status = _grade(True, clause_accurate, valid_as_of)
+    score, status = _grade(True, clause_accurate, valid_as_of, s["trust_grade"])
     return VerifyResult(
         raw=raw, type="statute", exists=True,
         clause_accurate=clause_accurate, valid_as_of=valid_as_of,
