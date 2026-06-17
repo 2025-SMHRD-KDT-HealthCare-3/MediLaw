@@ -64,7 +64,11 @@ def _match_statute(law_name: str):
     ).fetchone()
 
 
-def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str | None) -> VerifyResult:
+_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮"  # 원숫자 1~15 (한국 법령 항 표기)
+
+
+def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str | None,
+                   paragraph_no: int | None = None) -> VerifyResult:
     s = _match_statute(law_name)
     if not s:
         score, status = _grade(False, None, None)
@@ -75,13 +79,14 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
         )
 
     clause_accurate = None
+    paragraph_missing = False
     article_url = s["source_url"] or ""
     matched_label = s["name"]
     if article_no:
         # 'N' 또는 'N의M' 형태 모두 시도
         variants = [article_no, article_no.replace("-", "의")]
         art = db().execute(
-            f"""SELECT id, article_title FROM articles
+            f"""SELECT id, article_title, content FROM articles
                 WHERE statute_id = ? AND article_no IN ({','.join('?' * len(variants))})
                 LIMIT 1""",
             (s["id"], *variants),
@@ -90,6 +95,15 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
         matched_label = f"{s['name']} 제{article_no}조"
         if art and art["article_title"]:
             matched_label += f"({art['article_title']})"
+        # 항(項) 검증: 조문 본문(content)에 해당 항이 실제로 존재하는지 확인
+        if art and paragraph_no is not None and 1 <= paragraph_no <= len(_CIRCLED):
+            content = art["content"] or ""
+            symbol = _CIRCLED[paragraph_no - 1]
+            if symbol in content:
+                matched_label += f" 제{paragraph_no}항"
+            else:
+                clause_accurate = False
+                paragraph_missing = True
 
     valid_as_of = None
     if as_of:
@@ -102,7 +116,9 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
         clause_accurate is not False and valid_as_of is not False
     )  # exists는 위에서 True 보장
     notes = []
-    if clause_accurate is False:
+    if paragraph_missing:
+        notes.append(f"제{paragraph_no}항이 해당 조문에 존재하지 않음")
+    elif clause_accurate is False:
         notes.append(f"제{article_no}조가 해당 법령에 존재하지 않음")
     if valid_as_of is False:
         notes.append(f"{as_of} 시점에 미발효(발효일 {s['effective_from']})")
@@ -155,11 +171,13 @@ def extract_and_verify(text: str, as_of: str | None) -> list[VerifyResult]:
     for m in _STATUTE_RE.finditer(text):
         law_name, art, art_ui, _hang = m.group(1), m.group(2), m.group(3), m.group(4)
         article_no = f"{art}의{art_ui}" if art_ui else art
-        key = f"s:{law_name.strip()}:{article_no}"
+        paragraph_no = int(_hang) if _hang else None
+        key = f"s:{law_name.strip()}:{article_no}:{_hang or ''}"
         if key in seen:
             continue
         seen.add(key)
-        results.append(verify_statute(law_name, article_no, m.group(0).strip(), as_of))
+        results.append(
+            verify_statute(law_name, article_no, m.group(0).strip(), as_of, paragraph_no))
 
     for m in _CASE_RE.finditer(text):
         case_no = re.sub(r"\s", "", m.group(1))
