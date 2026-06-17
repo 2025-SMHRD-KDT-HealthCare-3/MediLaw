@@ -130,6 +130,20 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
     if valid_as_of is False:
         notes.append(f"{as_of} 시점에 미발효(발효일 {s['effective_from']})")
     score, status = _grade(True, clause_accurate, valid_as_of, s["trust_grade"])
+
+    # 모호(저신뢰) 매칭 보정: 정확 매칭이 아니면서 짧은 법령명이 긴 인용 문자열에
+    # 헐겁게 박힌 경우만 엄격하게 '주의'로 낮춘다(정확 매칭/4대 법령은 회귀 0).
+    cited = law_name.strip()
+    db_name = s["name"].strip()
+    exact_match = db_name == cited
+    if not exact_match:
+        coverage = len(db_name) / len(cited) if cited else 1.0
+        ambiguous = len(db_name) <= 4 and coverage < 0.6
+        if ambiguous and status == "확인":
+            status = "주의"
+            score = min(score, 70)
+            notes.append(f"법령명 매칭이 모호함(매칭: {s['name']})")
+
     return VerifyResult(
         raw=raw, type="statute", exists=True,
         clause_accurate=clause_accurate, valid_as_of=valid_as_of,
