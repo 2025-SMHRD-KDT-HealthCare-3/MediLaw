@@ -69,7 +69,7 @@
 |---|---|---|---|
 | 1 | RAG 검색 | `POST /v1/retrieve {"query":"무면허 의료행위"}` | `output` 비어있지 않음, `method:"hybrid"` |
 | 2 | Source Pack | `POST /v1/source-pack {"query":"의료광고 심의"}` | `output` 마크다운 + `citations[]` |
-| 3 | Citation Firewall | `POST /v1/verify {"text":"의료법 제27조와 가짜 의료법 제999조"}` | `summary` verified 1 / failed 1 |
+| 3 | Citation Firewall | `POST /v1/verify {"text":"의료법 제27조와 가짜 의료법 제999조"}` | 제27조 `확인`(trust_score≥85) / 제999조 `오류`(25), `avg_score` |
 | 4 | 법령 검색 | `GET /v1/statutes/search?q=의료광고` | `output[]` |
 | 5 | AI 챗봇 | `POST /chat {"question":"..."}` | `answer`+`sources`+`citation_check` |
 | 6 | 멀티턴/재작성 | `history` 포함 호출 | `search_query`가 standalone으로 재작성 |
@@ -120,8 +120,9 @@ data: {"type":"token","text":"의료법상 ... [1]"}
 data: {"type":"done","citation_check":{
   "output":[{"raw":"의료법 제56조","type":"statute","exists":true,
              "clause_accurate":true,"valid_as_of":null,"verified":true,
+             "trust_score":95,"status":"확인",
              "matched_label":"의료법 제56조","matched_source_url":"...","note":""}],
-  "summary":{"total":1,"verified":1,"failed":0},"as_of":null}}
+  "summary":{"total":1,"verified":1,"failed":0,"avg_score":95},"as_of":null}}
 ```
 에러 시 `{"type":"error","message":"..."}`. ⚠️ 브라우저 `EventSource`는 GET만 지원 → POST는 `fetch` + `ReadableStream`으로 직접 파싱.
 
@@ -266,8 +267,19 @@ curl -s -X POST localhost:8077/chat/checklist -H 'content-type: application/json
 AI 답변의 법령·판례 인용을 DB와 대조(존재·조문 정확성·판례 유효성·시점). `text`(자동 추출) 또는 `citations`(구조화) 중 하나 이상.
 
 **요청** `{"text":"의료법 제27조와 가짜 의료법 제999조","as_of":"2026-06-15"}`
-**응답** `{"output":[VerifyResult...],"summary":{"total":2,"verified":1,"failed":1},"as_of":"2026-06-15"}`
-`VerifyResult = {raw, type(statute|case|unknown), exists, clause_accurate, valid_as_of, verified, matched_label, matched_source_url, note}`
+**응답** `{"output":[VerifyResult...],"summary":{"total":2,"verified":1,"failed":1,"avg_score":60},"as_of":"2026-06-15"}`
+`VerifyResult = {raw, type(statute|case|unknown), exists, clause_accurate, valid_as_of, verified, trust_score, status, matched_label, matched_source_url, note}`
+
+**신뢰 점수(`trust_score` 0~100) + 상태(`status`)** — 기획서대로 수치와 3단계를 함께 출력:
+
+| status | trust_score | 의미 |
+|---|---|---|
+| `확인` | 85~100 | 존재·조문·시점 핵심검증 통과(미검증 항목만큼 소폭 감점: 시점 -5, 조문대조 불가 -10) |
+| `주의` | 60 | 존재하나 `as_of` 시점엔 미발효 / 그 이후 선고된 판례 |
+| `오류` | 0~25 | 법령·판례가 없음(0) 또는 조문 환각(25, 법령은 있으나 그 조문 없음) |
+
+`summary.avg_score` = 인용 전체 평균 신뢰점수. 이 검증은 `/chat`·`/documents/review` 응답의 `citation_check`에도 자동 내장.
+> 예: `의료법 제27조`→`확인 95` · 가짜 `제999조`→`오류 25` · `대법원 2006도9311`→`확인 85`.
 
 ---
 

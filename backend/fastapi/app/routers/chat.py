@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from app import llm
 from app.auth import require_api_key
-from app.citations import extract_and_verify
+from app.citations import extract_and_verify, summarize
 from app.english import detect_lang, english_article
 from app.rag import hybrid_search
 from app.schemas import (
@@ -24,7 +24,6 @@ from app.schemas import (
     ChecklistResponse,
     ChecklistSummary,
     VerifyResponse,
-    VerifySummary,
 )
 
 router = APIRouter(prefix="", tags=["AI 챗봇"])
@@ -115,12 +114,7 @@ def _build(req: ChatRequest):
 
 def _citation_check(answer: str, as_of) -> VerifyResponse:
     results = extract_and_verify(answer, as_of)
-    verified = sum(1 for r in results if r.verified)
-    return VerifyResponse(
-        output=results,
-        summary=VerifySummary(total=len(results), verified=verified, failed=len(results) - verified),
-        as_of=as_of,
-    )
+    return VerifyResponse(output=results, summary=summarize(results), as_of=as_of)
 
 
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])

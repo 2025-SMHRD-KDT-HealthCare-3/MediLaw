@@ -9,7 +9,36 @@
 import re
 
 from app.db import db
-from app.schemas import CitationInput, VerifyResult
+from app.schemas import CitationInput, VerifyResult, VerifySummary
+
+
+def _grade(exists: bool, clause_accurate, valid_as_of) -> tuple[int, str]:
+    """검증 신호 → (신뢰 점수 0~100, 상태 확인|주의|오류).
+
+    오류 = 존재하지 않거나 조문 불일치(환각). 주의 = 존재하나 그 시점엔 미발효/이후 선고.
+    확인 = 핵심 검증 통과(미검증 항목만큼 소폭 감점).
+    """
+    if not exists:
+        return 0, "오류"
+    if clause_accurate is False:            # 조문 환각(법령은 있으나 그 조문 없음)
+        return 25, "오류"
+    if valid_as_of is False:                # 존재하나 as_of 시점엔 미발효/이후 선고
+        return 60, "주의"
+    score = 100
+    if clause_accurate is None:             # 조문 단위 대조 못함(법령명만 인용/판례)
+        score -= 10
+    if valid_as_of is None:                 # 시점 미검증(as_of 미지정)
+        score -= 5
+    return score, "확인"
+
+
+def summarize(results: list[VerifyResult]) -> VerifySummary:
+    """검증 결과 목록 → 요약(개수 + 평균 신뢰 점수)."""
+    verified = sum(1 for r in results if r.verified)
+    avg = round(sum(r.trust_score for r in results) / len(results)) if results else 0
+    return VerifySummary(
+        total=len(results), verified=verified, failed=len(results) - verified, avg_score=avg)
+
 
 # 법령 인용: (법령명) 제N조(의M)?(제K항)?
 _STATUTE_RE = re.compile(
@@ -38,8 +67,10 @@ def _match_statute(law_name: str):
 def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str | None) -> VerifyResult:
     s = _match_statute(law_name)
     if not s:
+        score, status = _grade(False, None, None)
         return VerifyResult(
             raw=raw, type="statute", exists=False, verified=False,
+            trust_score=score, status=status,
             note=f"'{law_name.strip()}' 법령을 DB에서 찾을 수 없음",
         )
 
@@ -73,10 +104,12 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
         notes.append(f"제{article_no}조가 해당 법령에 존재하지 않음")
     if valid_as_of is False:
         notes.append(f"{as_of} 시점에 미발효(발효일 {s['effective_from']})")
+    score, status = _grade(True, clause_accurate, valid_as_of)
     return VerifyResult(
         raw=raw, type="statute", exists=True,
         clause_accurate=clause_accurate, valid_as_of=valid_as_of,
-        verified=verified, matched_label=matched_label,
+        verified=verified, trust_score=score, status=status,
+        matched_label=matched_label,
         matched_source_url=article_url, note="; ".join(notes),
     )
 
@@ -88,8 +121,10 @@ def verify_case(case_no: str, raw: str, as_of: str | None) -> VerifyResult:
         (cn,),
     ).fetchone()
     if not row:
+        score, status = _grade(False, None, None)
         return VerifyResult(
             raw=raw, type="case", exists=False, verified=False,
+            trust_score=score, status=status,
             note=f"사건번호 '{cn}' 판례를 DB에서 찾을 수 없음",
         )
     valid_as_of = None
@@ -99,9 +134,11 @@ def verify_case(case_no: str, raw: str, as_of: str | None) -> VerifyResult:
     notes = []
     if valid_as_of is False:
         notes.append(f"{as_of} 이후 선고된 판례(선고일 {row['date']})")
+    score, status = _grade(True, None, valid_as_of)
     return VerifyResult(
         raw=raw, type="case", exists=True, valid_as_of=valid_as_of,
-        verified=valid_as_of is not False, matched_label=label,
+        verified=valid_as_of is not False, trust_score=score, status=status,
+        matched_label=label,
         matched_source_url=row["source_url"] or "", note="; ".join(notes),
     )
 
@@ -144,5 +181,7 @@ def verify_inputs(citations: list[CitationInput], as_of: str | None) -> list[Ver
             raw = c.raw or f"{c.law_name} 제{c.article_no}조" if c.article_no else (c.raw or c.law_name)
             results.append(verify_statute(c.law_name, c.article_no, raw, as_of))
         else:
-            results.append(VerifyResult(raw=c.raw or "", type="unknown", exists=False, verified=False, note="인용 정보 부족"))
+            results.append(VerifyResult(raw=c.raw or "", type="unknown", exists=False,
+                                        verified=False, trust_score=0, status="오류",
+                                        note="인용 정보 부족"))
     return results

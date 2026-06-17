@@ -79,6 +79,8 @@ class VerifyResult(BaseModel):
     clause_accurate: Optional[bool] = None
     valid_as_of: Optional[bool] = None
     verified: bool
+    trust_score: int = Field(0, ge=0, le=100, description="신뢰 점수 0~100")
+    status: Literal["확인", "주의", "오류"] = Field("오류", description="확인=신뢰 / 주의=조건부 / 오류=환각·불일치")
     matched_label: str = ""
     matched_source_url: str = ""
     note: str = ""
@@ -88,6 +90,7 @@ class VerifySummary(BaseModel):
     total: int
     verified: int
     failed: int
+    avg_score: int = Field(0, ge=0, le=100, description="인용 전체 평균 신뢰 점수")
 
 
 class VerifyResponse(BaseModel):
