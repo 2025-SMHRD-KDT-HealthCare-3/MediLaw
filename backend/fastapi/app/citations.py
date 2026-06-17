@@ -67,7 +67,7 @@ def _compact(date_str: str) -> str:
 def _match_statute(law_name: str):
     """후보 법령명에 포함된 실제 법령 중 가장 긴 것을 반환."""
     return db().execute(
-        """SELECT id, name, source_url, effective_from, trust_grade
+        """SELECT id, law_id, name, source_url, effective_from, trust_grade
            FROM statutes
            WHERE ? LIKE '%' || name || '%'
            ORDER BY LENGTH(name) DESC LIMIT 1""",
@@ -76,6 +76,69 @@ def _match_statute(law_name: str):
 
 
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮"  # 원숫자 1~15 (한국 법령 항 표기)
+
+
+def _fmt_ymd(ymd: str) -> str:
+    """YYYYMMDD → YYYY-MM-DD (포맷 불일치 시 원본 반환, graceful)."""
+    d = _compact(ymd)
+    if len(d) == 8:
+        return f"{d[0:4]}-{d[4:6]}-{d[6:8]}"
+    return ymd
+
+
+def _cross_check_revisions(s, as_of, score, status, notes) -> tuple[int, str]:
+    """statutes 매칭 성공 후 law_revisions와 교차검증해 구법 인용 리스크를 경고.
+
+    law_revisions 데이터(4대 법령 등)가 있을 때만 동작. 테이블 부재/빈 테이블/
+    해당 law_id 행 없음이면 점수·상태·note를 전혀 건드리지 않고 그대로 반환한다.
+    - (a) 시행예정: 정보성 note만(점수/상태 불변).
+    - (b) 구법 가능성(as_of 지정 시만): as_of 시점 시행본이 현행(검증에 쓴 버전)보다
+          이전이면 '확인'→'주의'로 낮추고 score=min(score,70), note 추가.
+    """
+    try:
+        law_id = s["law_id"]
+    except (KeyError, IndexError):
+        return score, status
+    if not law_id:
+        return score, status
+    try:
+        conn = db()
+        from app import lawapi
+        if not lawapi.has_revisions(conn):
+            return score, status
+        rows = conn.execute(
+            "SELECT effective_on, status, revision_type FROM law_revisions "
+            "WHERE law_id = ? ORDER BY effective_on",
+            (law_id,),
+        ).fetchall()
+    except Exception:
+        return score, status
+    if not rows:
+        return score, status
+
+    # (a) 시행예정(개정 예정) — 정보성 note만, 점수/상태 불변.
+    upcoming = [r["effective_on"] for r in rows if r["status"] == "시행예정" and r["effective_on"]]
+    if upcoming:
+        notes.append(f"개정 시행예정 있음(시행일 {_fmt_ymd(min(upcoming))})")
+
+    # (b) 구법 가능성 — as_of 지정 시에만.
+    if as_of:
+        as_of_c = _compact(as_of)
+        eff_from = _compact(s["effective_from"] or "")
+        # as_of 시점에 시행 중이던 실제 버전(effective_on <= as_of 중 가장 늦은 것).
+        in_force = [_compact(r["effective_on"]) for r in rows
+                    if r["effective_on"] and _compact(r["effective_on"]) <= as_of_c]
+        if in_force and eff_from:
+            as_of_version = max(in_force)
+            if as_of_version < eff_from:  # 당시 시행본이 현행보다 이전 = 구법 상황
+                if status == "확인":
+                    status = "주의"
+                    score = min(score, 70)
+                notes.append(
+                    f"{as_of} 시점에는 다른 버전이 시행 중이었을 수 있음"
+                    f"(당시 시행본 {_fmt_ymd(as_of_version)}, 현행과 비교 권장)")
+
+    return score, status
 
 
 def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str | None,
@@ -147,6 +210,10 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
             status = "주의"
             score = min(score, 70)
             notes.append(f"법령명 매칭이 모호함(매칭: {s['name']})")
+
+    # 구법 인용 리스크 교차검증(기획서 ⑤) — law_revisions 데이터가 있을 때만.
+    # 데이터 없으면(테이블 부재/빈 테이블/해당 law_id 행 없음) 완전히 스킵 → 기존 동작 유지.
+    score, status = _cross_check_revisions(s, as_of, score, status, notes)
 
     return VerifyResult(
         raw=raw, type="statute", exists=True,
