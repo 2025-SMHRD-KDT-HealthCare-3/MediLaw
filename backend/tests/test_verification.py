@@ -1,7 +1,7 @@
 from conftest import signup_and_login
 
 
-def test_ai_answer_creates_evidence_and_verification(client):
+def test_ai_answer_creates_evidence_and_verification(client, mock_hms):
     token = signup_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
     room_id = client.post(
@@ -21,6 +21,7 @@ def test_ai_answer_creates_evidence_and_verification(client):
     assert data["answer_chat"]["speaker_type"] == "AI"
     assert data["evidences"][0]["ans_id"] == ans_id
     assert data["verifications"][0]["ans_id"] == ans_id
+    assert data["verifications"][0]["confidence_score"] == "82.00"
 
     assert client.get(f"/api/answers/{ans_id}/evidences").status_code == 401
     evidence_response = client.get(f"/api/answers/{ans_id}/evidences", headers=headers)
@@ -36,8 +37,11 @@ def test_ai_answer_creates_evidence_and_verification(client):
 
     verify_response = client.post(f"/api/answers/{ans_id}/verify", json={}, headers=headers)
     assert verify_response.status_code == 200
-    assert verify_response.json()["data"]["verification_status"] in {
+    verify_data = verify_response.json()["data"]
+    assert isinstance(verify_data, list)
+    assert verify_data[0]["verification_status"] in {
         "CONFIRMED",
         "WARNING",
         "ERROR",
     }
+    assert verify_data[0]["confidence_score"] == "91.00"

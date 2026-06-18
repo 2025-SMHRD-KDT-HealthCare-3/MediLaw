@@ -10,6 +10,7 @@ from app.core.response import success_response
 from app.models.user import User
 from app.schemas.ai_ad_copy_schema import AiAdCopyCreate, AiAdCopyResponse
 from app.schemas.chat_schema import ChatResponse
+from app.schemas.evidence_schema import EvidenceResponse
 from app.schemas.verification_schema import VerificationResponse
 from app.services import ai_ad_copy_service
 
@@ -58,9 +59,11 @@ async def review_ad_copy(
             if result["answer_chat"] is not None
             else None
         ),
+        "evidences": [EvidenceResponse.model_validate(item) for item in result["evidences"]],
         "verifications": [
             VerificationResponse.model_validate(item) for item in result["verifications"]
         ],
+        "room_linked": result["room_linked"],
     }
     return success_response(jsonable_encoder(payload))
 

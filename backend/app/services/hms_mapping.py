@@ -5,6 +5,30 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
+STATUS_MAP = {
+    "CONFIRMED": "CONFIRMED",
+    "OK": "CONFIRMED",
+    "SUCCESS": "CONFIRMED",
+    "VERIFIED": "CONFIRMED",
+    "\ud655\uc778": "CONFIRMED",
+    "WARNING": "WARNING",
+    "WARN": "WARNING",
+    "\uc8fc\uc758": "WARNING",
+    "ERROR": "ERROR",
+    "FAILED": "ERROR",
+    "FAIL": "ERROR",
+    "INVALID": "ERROR",
+    "\uc624\ub958": "ERROR",
+}
+
+
+def clean_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def parse_law_label(label: str | None) -> tuple[str | None, str | None]:
     """Parse labels like '의료법 제27조' into law name and article number."""
     if not label:
@@ -14,13 +38,13 @@ def parse_law_label(label: str | None) -> tuple[str | None, str | None]:
     if not value:
         return None, None
 
-    match = re.search(r"(제?\s*\d+(?:-\d+)?\s*조(?:의\s*\d+)?)", value)
+    match = re.search(r"(\uc81c?\s*\d+(?:-\d+)?\s*\uc870(?:\uc758\s*\d+)?)", value)
     if not match:
         return value, None
 
     article_no = re.sub(r"\s+", "", match.group(1))
     if article_no[0].isdigit():
-        article_no = f"제{article_no}"
+        article_no = f"\uc81c{article_no}"
     law_name = value[: match.start()].strip() or None
     return law_name, article_no
 
@@ -41,12 +65,9 @@ def clamp_score(value: Any) -> Decimal | None:
 
 def map_verification_status(item: dict[str, Any]) -> str:
     raw_status = str(item.get("status") or "").strip().upper()
-    if raw_status in {"CONFIRMED", "확인", "OK", "SUCCESS", "VERIFIED"}:
-        return "CONFIRMED"
-    if raw_status in {"ERROR", "오류", "FAILED", "FAIL", "INVALID"}:
-        return "ERROR"
-    if raw_status in {"WARNING", "주의", "WARN"}:
-        return "WARNING"
+    mapped = STATUS_MAP.get(raw_status)
+    if mapped:
+        return mapped
 
     if item.get("verified") is True:
         return "CONFIRMED"
@@ -56,8 +77,12 @@ def map_verification_status(item: dict[str, Any]) -> str:
 
 
 def verification_reason(item: dict[str, Any]) -> str | None:
-    for key in ("reason", "rationale", "message", "raw"):
-        value = item.get(key)
+    for key in ("reason", "rationale", "message", "note", "raw"):
+        value = clean_text(item.get(key))
         if value:
-            return str(value)
+            return value
     return None
+
+
+def hms_bool(value: Any) -> bool:
+    return bool(value) if value is not None else False
