@@ -13,7 +13,16 @@ MediLaw 적용 (의료법만이 아니라 4대 법령 전체 + 의료·헬스케
      1회 위임 → 3) 저신뢰면 needs_clarification(되묻기). 키워드 사전은 오분류 로그
      보며 계속 보강하는 부분.
 """
+import re
+
 from app import llm
+
+_HANGUL = re.compile(r"[가-힣]")
+
+
+def _has_korean(text: str) -> bool:
+    return bool(_HANGUL.search(text or ""))
+
 
 # 답변할 tier(거절은 Tier 3). 정책: 일반 개인정보(Tier 1)도 답변.
 # 만약 '헬스케어 맥락만' 답변하려면 IN_SCOPE_TIERS = (2,) 로 바꾸면 됨.
@@ -54,6 +63,8 @@ def rule_based_route(question: str, has_history: bool = False):
 
     has_history=True 이면 키워드 없는 짧은 후속질문("그럼 처벌은?")을 하드 거절하지 않고
     LLM(맥락 보유)에 위임한다 — 멀티턴 후속이 거절되는 것을 방지.
+    키워드 사전은 한국어이므로, 한국어가 아닌(영어 등) 질문은 규칙으로 단정하지 않고
+    LLM에 위임한다 — 영어 입력(lang=en) 질문이 거절되는 것을 방지.
     """
     has_med = _contains(question, MEDICAL_TRIGGERS)
     has_priv = _contains(question, PRIVACY_NET_ANCHORS)
@@ -64,7 +75,9 @@ def rule_based_route(question: str, has_history: bool = False):
     if has_priv and not is_ambiguous:             # 순수 일반 개인정보/정보통신(번질 여지 없음)
         return 1
     if not has_priv and not has_med:              # 키워드 없음
-        return None if has_history else 3         # 대화 중이면 후속일 수 있어 LLM에 위임
+        if has_history or not _has_korean(question):  # 후속이거나 비한국어 → LLM 위임
+            return None
+        return 3
     return None                                   # priv + 모호 플래그 → LLM 위임
 
 

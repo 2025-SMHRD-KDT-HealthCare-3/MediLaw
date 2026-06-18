@@ -77,6 +77,17 @@ def test_keywordless_singleshot_vs_followup():
     assert dr.rule_based_route(q, has_history=True) is None
 
 
+def test_non_korean_defers_to_llm():
+    # 키워드 사전은 한국어 → 영어 등 비한국어 질문은 규칙으로 단정 않고 LLM 위임(None).
+    # (한국어 의료 키워드가 없어도 Tier3로 하드 거절하면 안 됨 — 영어 입력 기능 보호)
+    for q in [
+        "What is the penalty for unlicensed medical practice?",
+        "Do I need consent to use patient photos in ads?",
+        "Write me a python quicksort function",
+    ]:
+        assert dr.rule_based_route(q) is None, f"비한국어 질문은 None(LLM 위임)이어야: {q!r}"
+
+
 def test_in_scope_policy():
     assert dr.is_in_scope({"tier": 1})
     assert dr.is_in_scope({"tier": 2})
@@ -89,6 +100,9 @@ ROUTE_AMBIGUOUS_CASES = [
     ("광고 문자 보낼 때 수신동의 받아야 하나요?", {1, 2}),
     ("직원 개인정보 수집 동의서 양식 알려줘", {1, 2}),
     ("회원정보를 마케팅에 활용해도 되나요?", {1, 2}),
+    # 영어 입력(lang=en) — 규칙은 None, LLM이 분류
+    ("What is the penalty for unlicensed medical practice?", {2}),  # 영어 의료 → 핵심
+    ("Write me a python quicksort function", {3}),                  # 영어 잡담 → 거절
 ]
 
 _H_MED = [
