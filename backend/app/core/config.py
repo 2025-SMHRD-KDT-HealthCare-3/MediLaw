@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "change-me"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    HMS_URL: str = "http://127.0.0.1:8000"
     OPENAI_API_KEY: str | None = None
     LAW_API_KEY: str | None = None
     UPLOAD_DIR: str = "storage/uploads"
