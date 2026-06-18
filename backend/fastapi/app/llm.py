@@ -90,6 +90,46 @@ def rewrite_query(history: list[dict], question: str) -> str:
         return question
 
 
+_DOMAIN_SYSTEM = (
+    "You are a domain classifier for a Korean medical-law compliance assistant.\n"
+    "Decide whether the user's CURRENT question belongs to the assistant's domain.\n"
+    "IN-DOMAIN (in_domain=true) covers: Korean Medical Service Act(의료법), Personal "
+    "Information Protection Act(개인정보보호법), Bioethics and Safety Act(생명윤리법), "
+    "Network Act(정보통신망법); medical advertising(의료광고), healthcare/health data "
+    "regulation, personal/sensitive data processing, patient consent, hospital/clinic "
+    "operation compliance, telemedicine, medical device/pharma marketing rules, and any "
+    "legal/regulatory/compliance question about medicine or healthcare.\n"
+    "OUT-OF-DOMAIN (in_domain=false): general chit-chat, weather, coding, math, news, "
+    "stock/investment tips, recipes, generic trivia — anything unrelated to medical/"
+    "healthcare law & compliance.\n"
+    "If the question is a short follow-up, use the prior conversation to judge intent. "
+    "When genuinely unsure, prefer in_domain=true.\n"
+    'Respond ONLY as JSON: {"in_domain": true} or {"in_domain": false}.'
+)
+
+
+def in_domain(question: str, history: list[dict] | None = None) -> bool:
+    """질문이 의료·헬스케어 법률 컴플라이언스 도메인인지 판정.
+
+    멀티턴이면 직전 맥락을 함께 전달(후속질문 판정용). LLM 사용 불가/판정 실패 시
+    True 로 graceful — 가드 오탐으로 정상 질문을 막지 않기 위함.
+    """
+    user = ""
+    if history:
+        convo = "\n".join(f"{t['role']}: {t['content']}" for t in history[-4:])
+        user = f"[Prior conversation]\n{convo}\n\n"
+    user += f"[Current question]\n{question}"
+    try:
+        data = chat_json([
+            {"role": "system", "content": _DOMAIN_SYSTEM},
+            {"role": "user", "content": user},
+        ])
+    except LLMUnavailable:
+        return True
+    val = data.get("in_domain", True)
+    return val is not False  # 명시적 false 만 거절, 그 외(누락/True)는 통과
+
+
 def ocr_image(b64_png: str) -> str:
     """비전 모델로 이미지(base64 PNG)에서 한국어 텍스트 추출.
 

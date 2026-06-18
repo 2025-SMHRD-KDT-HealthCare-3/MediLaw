@@ -59,6 +59,25 @@ _NO_EVIDENCE = "제공된 자료로는 확인되지 않습니다. 질문을 더 
 _NO_EVIDENCE_EN = ("This cannot be confirmed from the provided materials. Please make your question more specific.\n"
                    "* This response is informational, not legal advice.")
 
+# 도메인 밖(잡담·코딩·날씨 등) 질문 거절 메시지 — RAG/생성 없이 즉시 반환.
+_OUT_OF_DOMAIN = (
+    "저는 의료법·개인정보보호법·생명윤리법·정보통신망법 등 의료·헬스케어 컴플라이언스 "
+    "관련 질문만 도와드립니다. 관련 질문을 해주세요.\n"
+    "※ 본 답변은 법률 자문이 아니라 정보 제공입니다."
+)
+_OUT_OF_DOMAIN_EN = (
+    "I can only help with medical/healthcare compliance questions under Korean law "
+    "(Medical Service Act, Personal Information Protection Act, Bioethics and Safety Act, "
+    "Network Act, etc.). Please ask a related question.\n"
+    "* This response is informational, not legal advice."
+)
+
+
+def _out_of_domain(req: ChatRequest, lang: str) -> bool:
+    """도메인 가드 — 의료·헬스케어 컴플라이언스 밖이면 True. 애매하면 통과(False)."""
+    history = [{"role": t.role, "content": t.content} for t in req.history[-MAX_HISTORY:]]
+    return not llm.in_domain(req.question, history)
+
 
 def _build(req: ChatRequest):
     """(messages, sources, method, lang, search_q). 근거 없으면 messages=None."""
@@ -119,6 +138,12 @@ def _citation_check(answer: str, as_of) -> VerifyResponse:
 
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 def chat(req: ChatRequest):
+    lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
+    if _out_of_domain(req, lang):
+        refusal = _OUT_OF_DOMAIN_EN if lang == "en" else _OUT_OF_DOMAIN
+        return ChatResponse(answer=refusal, sources=[], method="none", lang=lang,
+                            search_query=req.question,
+                            citation_check=_citation_check("", req.as_of), as_of=req.as_of)
     messages, sources, method, lang, search_q = _build(req)
     no_ev = _NO_EVIDENCE_EN if lang == "en" else _NO_EVIDENCE
     if messages is None:
@@ -141,6 +166,18 @@ def _sse(obj: dict) -> str:
 
 @router.post("/chat/stream", dependencies=[Depends(require_api_key)])
 def chat_stream(req: ChatRequest):
+    lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
+    if _out_of_domain(req, lang):
+        refusal = _OUT_OF_DOMAIN_EN if lang == "en" else _OUT_OF_DOMAIN
+
+        def gen_refuse():
+            yield _sse({"type": "sources", "method": "none", "lang": lang,
+                        "search_query": req.question, "sources": []})
+            yield _sse({"type": "token", "text": refusal})
+            yield _sse({"type": "done", "citation_check": _citation_check("", req.as_of).model_dump()})
+
+        return StreamingResponse(gen_refuse(), media_type="text/event-stream")
+
     messages, sources, method, lang, search_q = _build(req)
 
     def gen():
