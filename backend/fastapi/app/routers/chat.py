@@ -10,7 +10,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import llm
+from app import domain_router, llm
 from app.auth import require_api_key
 from app.citations import extract_and_verify, summarize
 from app.english import detect_lang, english_article
@@ -73,10 +73,16 @@ _OUT_OF_DOMAIN_EN = (
 )
 
 
-def _out_of_domain(req: ChatRequest, lang: str) -> bool:
-    """도메인 가드 — 의료·헬스케어 컴플라이언스 밖이면 True. 애매하면 통과(False)."""
+# needs_clarification(Tier 2 모호)일 때 답변 끝에 붙이는 되묻기 한 줄.
+_CLARIFY = "\n\n※ 의료기관·환자·건강정보와 관련된 상황이라면 구체적으로 알려주시면 더 정확히 답변드립니다."
+_CLARIFY_EN = ("\n\n* If this concerns a medical institution, patients, or health data, "
+               "please specify for a more precise answer.")
+
+
+def _domain_route(req: ChatRequest) -> dict:
+    """3-tier 도메인 라우팅. {tier, needs_clarification, source}."""
     history = [{"role": t.role, "content": t.content} for t in req.history[-MAX_HISTORY:]]
-    return not llm.in_domain(req.question, history)
+    return domain_router.route(req.question, history)
 
 
 def _build(req: ChatRequest):
@@ -139,7 +145,8 @@ def _citation_check(answer: str, as_of) -> VerifyResponse:
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 def chat(req: ChatRequest):
     lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
-    if _out_of_domain(req, lang):
+    decision = _domain_route(req)
+    if not domain_router.is_in_scope(decision):  # Tier 3 → 거절
         refusal = _OUT_OF_DOMAIN_EN if lang == "en" else _OUT_OF_DOMAIN
         return ChatResponse(answer=refusal, sources=[], method="none", lang=lang,
                             search_query=req.question,
@@ -154,6 +161,8 @@ def chat(req: ChatRequest):
         answer = llm.chat(messages)
     except llm.LLMUnavailable as e:
         raise HTTPException(503, str(e))
+    if decision["needs_clarification"]:  # Tier 2 모호 → 답변 끝에 되묻기 한 줄
+        answer += _CLARIFY_EN if lang == "en" else _CLARIFY
     return ChatResponse(
         answer=answer, sources=sources, method=method, lang=lang, search_query=search_q,
         citation_check=_citation_check(answer, req.as_of), as_of=req.as_of,
@@ -167,7 +176,8 @@ def _sse(obj: dict) -> str:
 @router.post("/chat/stream", dependencies=[Depends(require_api_key)])
 def chat_stream(req: ChatRequest):
     lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
-    if _out_of_domain(req, lang):
+    decision = _domain_route(req)
+    if not domain_router.is_in_scope(decision):  # Tier 3 → 거절
         refusal = _OUT_OF_DOMAIN_EN if lang == "en" else _OUT_OF_DOMAIN
 
         def gen_refuse():
@@ -195,6 +205,8 @@ def chat_stream(req: ChatRequest):
         except llm.LLMUnavailable as e:
             yield _sse({"type": "error", "message": str(e)})
             return
+        if decision["needs_clarification"]:  # Tier 2 모호 → 되묻기 한 줄 추가 토큰
+            yield _sse({"type": "token", "text": _CLARIFY_EN if lang == "en" else _CLARIFY})
         answer = "".join(parts)
         yield _sse({"type": "done", "citation_check": _citation_check(answer, req.as_of).model_dump()})
 

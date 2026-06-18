@@ -26,7 +26,7 @@
 - [x] **하이브리드 검색** FTS5 + OpenAI 임베딩(text-embedding-3-small, 512d) RRF, **sub-chunk**(대형 문서 분할)
 - [x] **데이터**: 4대 법령+시행령/규칙, 행정규칙, 판례, **법령해석례·개인정보위 결정문·보건복지부 가이드라인**(의료광고 등) — 법제처 Open API + 게시판 수집기
 - [x] **임베딩 빌드 완료** chunks 212,459 (sqlite-vec)
-- [x] **AI 챗봇** `POST /chat`(+SSE) — gpt-5.5 RAG + Citation Firewall 검증 + **도메인 가드**(의료법 밖 질문 거절)
+- [x] **AI 챗봇** `POST /chat`(+SSE) — gpt-5.5 RAG + Citation Firewall 검증 + **3-tier 도메인 라우터**(규칙→제약LLM→되묻기, 4대 법령 전체·헬스케어 범위)
 - [x] **능동형 PDF 에디터** `POST /documents/review` — 위험 탐지 + before/after 수정안, 스캔본 **비전 OCR** fallback. **근거 연결·인덱스는 코드가**(코어 검색 기반), LLM은 판단·문구만
 - [x] **영어 입력 지원** `lang=en` — 법령은 **공식 영문**(법제처 elaw API), 판례·해석례·가이드라인은 비공식 번역
 - [x] **챗봇 멀티턴 기억** — `/chat`·`/chat/stream`이 `history[]`(이전 대화) 수신(무상태, 클라이언트 보관)
@@ -89,8 +89,10 @@
 
 ### 1. `POST /chat/stream` — AI 챗봇 (SSE) 🟢
 
-질문 → **도메인 가드**(의료·헬스케어 컴플라이언스 밖이면 정중히 거절, `sources:[]`·`method:"none"`) → 하이브리드 근거검색 → **gpt-5.5** 답변(근거 `[n]` 강제 인용) → **Citation Firewall** 자동검증.
-> 도메인 가드: "오늘 날씨", "코드 짜줘" 같은 의료법 무관 질문은 RAG/생성 없이 거절. 멀티턴 후속질문은 맥락으로 판정하고, 판정 실패/애매하면 통과(정상 질문 오탐 방지).
+질문 → **도메인 라우터(3-tier)** → 하이브리드 근거검색 → **gpt-5.5** 답변(근거 `[n]` 강제 인용) → **Citation Firewall** 자동검증.
+> **도메인 라우터**(`app/domain_router.py`): 결정론적 키워드 규칙으로 대부분 분류(LLM 호출 0), 모호한 중간만 제약 LLM 1회. 회귀 테스트는 `tests/test_domain_router.py`.
+> - **Tier 1** 일반 개인정보/정보통신망(의료 맥락 없음) → 답변 · **Tier 2** 의료·헬스케어(의료법·생명윤리·의료광고·환자·건강정보, 또는 프라이버시가 헬스케어로 번짐) → 답변(핵심) · **Tier 3** 무관(부동산·노동·날씨·코딩) → 거절(`sources:[]`·`method:"none"`).
+> - Tier 2 모호(예 "사무실 CCTV")는 답변 끝에 **되묻기 한 줄**(needs_clarification) 부착. 멀티턴 후속질문은 맥락으로 판정.
 단발 JSON이 필요하면 동일 body로 `POST /chat`(아래 응답 본문과 같은 형태, 완답까지 기다림 → UI는 첫 글자가 ~2초에 뜨는 스트리밍 권장. [성능](#성능-실측) 참고).
 
 **요청** `Content-Type: application/json`
