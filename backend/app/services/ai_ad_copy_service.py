@@ -1,32 +1,32 @@
 import json
 from typing import Any
 
-import httpx
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.ai.ad_copy_analyzer import analyze_ad_copy_stub
-from app.core.config import settings
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.models.user import User
 from app.repositories import ai_ad_copy_repository, chat_repository
 from app.schemas.ai_ad_copy_schema import AiAdCopyCreate
 from app.schemas.chat_schema import ChatCreate
-from app.services.ai_answer_service import persist_hms_verifications
+from app.services import hms_client
+from app.services.ai_answer_service import persist_hms_sources, persist_hms_verifications
 from app.services.room_service import ensure_room_open
 
 
 def analyze_and_create(db: Session, current_user: User, data: AiAdCopyCreate):
-    """Analyze an ad copy with stub logic and persist the user's history."""
-    analysis = analyze_ad_copy_stub(data.input_text, data.input_language)
-    try:
-        ai_copy = ai_ad_copy_repository.create(db, current_user.user_id, data, analysis)
-        db.commit()
-        db.refresh(ai_copy)
-        return ai_copy
-    except Exception:
-        db.rollback()
-        raise
+    """Review text ad copy with HMS and persist the user's history."""
+    result = review_document_and_create(
+        db,
+        current_user,
+        input_language=data.input_language,
+        text=data.input_text,
+        file_name=None,
+        file_content=None,
+        content_type=None,
+        room_id=data.room_id,
+    )
+    return result["ai_copy"]
 
 
 def _json_text(value: Any) -> str | None:
@@ -53,32 +53,46 @@ def _call_hms_document_review(
             )
         }
 
-    try:
-        response = httpx.post(
-            f"{settings.HMS_URL.rstrip('/')}/documents/review",
-            data=data,
-            files=files,
-            timeout=180,
-        )
-        response.raise_for_status()
-        payload = response.json()
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"HMS document review request failed: {exc}",
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="HMS document review response was not valid JSON",
-        ) from exc
+    return hms_client.post_multipart(
+        "/documents/review",
+        data=data,
+        files=files,
+        timeout=hms_client.DOCUMENT_TIMEOUT,
+    )
 
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="HMS document review response was not an object",
+
+def _collect_review_sources(hms_response: dict) -> list[dict]:
+    sources: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add_source(item: Any) -> None:
+        if not isinstance(item, dict):
+            return
+        label = item.get("label") or item.get("matched_label") or item.get("raw")
+        source_url = item.get("source_url") or item.get("matched_source_url") or ""
+        key = (str(label or ""), str(source_url or ""))
+        if not key[0] or key in seen:
+            return
+        seen.add(key)
+        sources.append(
+            {
+                "label": label,
+                "snippet": item.get("snippet") or item.get("segment_text") or item.get("reason"),
+                "source_url": source_url,
+            }
         )
-    return payload
+
+    for item in hms_response.get("sources") or []:
+        add_source(item)
+    for finding in hms_response.get("findings") or hms_response.get("issues") or []:
+        if isinstance(finding, dict):
+            for citation in finding.get("citations") or []:
+                add_source(citation)
+    citation_check = hms_response.get("citation_check")
+    if isinstance(citation_check, dict):
+        for item in citation_check.get("output") or []:
+            add_source(item)
+    return sources
 
 
 def review_document_and_create(
@@ -162,19 +176,27 @@ def review_document_and_create(
                 current_user.user_id,
                 hms_response.get("citation_check"),
             )
+            evidences = persist_hms_sources(
+                db,
+                ai_chat.chat_id,
+                _collect_review_sources(hms_response),
+            )
         else:
             user_chat = None
             ai_chat = None
+            evidences = []
 
         db.commit()
         db.refresh(ai_copy)
-        for item in [*(verifications or [])]:
+        for item in [*evidences, *(verifications or [])]:
             db.refresh(item)
         return {
             "ai_copy": ai_copy,
             "question_chat": user_chat,
             "answer_chat": ai_chat,
+            "evidences": evidences,
             "verifications": verifications,
+            "room_linked": room_id is not None,
             "hms": hms_response,
         }
     except Exception:

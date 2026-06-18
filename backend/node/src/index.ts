@@ -14,17 +14,28 @@ const FASTAPI_TARGET = process.env.FASTAPI_TARGET ?? 'http://127.0.0.1:8000'
 const PRODUCT_API_TARGET = process.env.PRODUCT_API_TARGET ?? 'http://127.0.0.1:8001'
 const PROD = process.env.NODE_ENV === 'production'
 
+const successPayload = (data: any = null, message = 'success') => ({
+  success: true,
+  message,
+  data,
+})
+
+const errorPayload = (message: string, code?: string, data: any = null) => ({
+  success: false,
+  message,
+  code,
+  data,
+})
+
 const proxyErrorHandler = (err: any, req: any, res: any) => {
   console.error('[proxy-error]', err?.code, req?.url)
   if (res?.headersSent) return
 
   const statusCode = err?.code === 'ECONNREFUSED' ? 503 : 504
-  const payload = {
-    error: {
-      code: `UPSTREAM_${err?.code ?? 'ERROR'}`,
-      message: '백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.',
-    },
-  }
+  const payload = errorPayload(
+    '백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.',
+    `UPSTREAM_${err?.code ?? 'ERROR'}`,
+  )
 
   if (typeof res?.status === 'function' && typeof res?.json === 'function') {
     res.status(statusCode).json(payload)
@@ -87,17 +98,17 @@ app.post('/api/auth/login', express.json(), async (req, res) => {
     const errorCode = err?.code ?? err?.cause?.code
     console.error('[auth-login-error]', errorCode, err?.message)
     res.status(errorCode === 'ECONNREFUSED' ? 503 : 504).json({
-      error: {
-        code: `UPSTREAM_${errorCode ?? 'ERROR'}`,
-        message: '백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.',
-      },
+      ...errorPayload(
+        '백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.',
+        `UPSTREAM_${errorCode ?? 'ERROR'}`,
+      ),
     })
   }
 })
 
 app.post('/api/auth/logout', (_req, res) => {
   res.clearCookie('session', { path: '/' })
-  res.json({ ok: true })
+  res.json(successPayload({ message: 'logged out' }))
 })
 
 app.use(
@@ -157,7 +168,7 @@ app.use(
 )
 
 app.use((_req, res) => {
-  res.status(404).json({ error: { code: 'NOT_FOUND', message: '경로 없음' } })
+  res.status(404).json(errorPayload('경로 없음', 'NOT_FOUND'))
 })
 
 app.use((err: any, _req: any, res: any, _next: any) => {
@@ -165,10 +176,10 @@ app.use((err: any, _req: any, res: any, _next: any) => {
   if (res.headersSent) return
 
   res.status(err.status || 500).json({
-    error: {
-      code: 'INTERNAL',
-      message: process.env.NODE_ENV === 'production' ? '서버 오류' : String(err?.message ?? err),
-    },
+    ...errorPayload(
+      process.env.NODE_ENV === 'production' ? '서버 오류' : String(err?.message ?? err),
+      'INTERNAL',
+    ),
   })
 })
 

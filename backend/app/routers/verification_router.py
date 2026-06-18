@@ -30,5 +30,7 @@ def verify_answer(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    verification = verification_service.verify_answer_stub(db, ans_id, current_user)
-    return success_response(jsonable_encoder(VerificationResponse.model_validate(verification)))
+    verifications = verification_service.verify_answer(db, ans_id, current_user)
+    return success_response(
+        jsonable_encoder([VerificationResponse.model_validate(item) for item in verifications])
+    )

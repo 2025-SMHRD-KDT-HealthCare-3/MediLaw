@@ -31,16 +31,24 @@ def test_closed_room_rejects_new_chat(client):
     assert chat_response.status_code == 400
 
 
-def test_summary_create_requires_admin(client):
+def test_summary_create_requires_admin(client, mock_hms):
     user_token = signup_and_login(client)
     room_id = _create_room(client, user_token)
+    user_headers = {"Authorization": f"Bearer {user_token}"}
 
     user_response = client.post(
         f"/api/rooms/{room_id}/summaries",
         json={},
-        headers={"Authorization": f"Bearer {user_token}"},
+        headers=user_headers,
     )
     assert user_response.status_code == 403
+
+    chat_response = client.post(
+        f"/api/rooms/{room_id}/chats",
+        json={"chat_text": "무면허 의료행위 상담이 필요합니다."},
+        headers=user_headers,
+    )
+    assert chat_response.status_code == 200
 
     admin_token = signup_and_login(client, login_id="admin1", role="ADMIN")
     admin_response = client.post(
@@ -50,6 +58,7 @@ def test_summary_create_requires_admin(client):
     )
     assert admin_response.status_code == 200
     assert admin_response.json()["data"]["admin_id"] != 0
+    assert "checklist_summary" in admin_response.json()["data"]["summary"]
 
 
 def test_invalid_file_reference_rejected(client):

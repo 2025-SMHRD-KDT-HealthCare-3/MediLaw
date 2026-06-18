@@ -19,7 +19,7 @@ def get_by_id(db: Session, room_id: int) -> Room | None:
 
 def get_list(db: Session, user_id: int | None = None, skip: int = 0, limit: int = 100) -> list[Room]:
     # TODO: add room_status filtering and access control conditions.
-    stmt = select(Room)
+    stmt = select(Room).order_by(Room.created_at.desc(), Room.room_id.desc())
     if user_id is not None:
         stmt = stmt.where(Room.user_id == user_id)
     return list(db.scalars(stmt.offset(skip).limit(limit)).all())
