@@ -26,12 +26,12 @@
 - [x] **하이브리드 검색** FTS5 + OpenAI 임베딩(text-embedding-3-small, 512d) RRF, **sub-chunk**(대형 문서 분할)
 - [x] **데이터**: 4대 법령+시행령/규칙, 행정규칙, 판례, **법령해석례·개인정보위 결정문·보건복지부 가이드라인**(의료광고 등) — 법제처 Open API + 게시판 수집기
 - [x] **임베딩 빌드 완료** chunks 212,459 (sqlite-vec)
-- [x] **AI 챗봇** `POST /chat`(+SSE) — gpt-5.5 RAG + Citation Firewall 검증
-- [x] **능동형 PDF 에디터** `POST /documents/review` — 위험 탐지 + before/after 수정안, 스캔본 **비전 OCR** fallback
+- [x] **AI 챗봇** `POST /chat`(+SSE) — gpt-5.5 RAG + Citation Firewall 검증 + **3-tier 도메인 라우터**(규칙→제약LLM→되묻기, 4대 법령 전체·헬스케어 범위)
+- [x] **능동형 PDF 에디터** `POST /documents/review` — 위험 탐지 + before/after 수정안, 스캔본 **비전 OCR** fallback. **근거 연결·인덱스는 코드가**(코어 검색 기반), LLM은 판단·문구만
 - [x] **영어 입력 지원** `lang=en` — 법령은 **공식 영문**(법제처 elaw API), 판례·해석례·가이드라인은 비공식 번역
 - [x] **챗봇 멀티턴 기억** — `/chat`·`/chat/stream`이 `history[]`(이전 대화) 수신(무상태, 클라이언트 보관)
 - [x] **능동형 체크리스트** — `/documents/review`가 "확인 필요 항목" 생성 + `prev_checklist` 대조로 추가/삭제/유지
-- [x] **대화 종료 후 체크리스트** `POST /chat/checklist` — '체크리스트 생성' 버튼: 전체 대화 → 법적 쟁점 추출 → RAG 근거검색 → 법적 대응 체크리스트 생성
+- [x] **통합 체크리스트** `POST /chat/checklist` — '체크리스트 생성' 버튼: **대화(history) + PDF 검토(reviews)** 종합 → 법적 쟁점 추출 → RAG 근거검색 → 통합 대응 체크리스트
 - [x] **법령 개정 현황 대시보드** `GET /v1/laws/*` — 법제처 데이터로 4대 법령 개정 타임라인(현행·시행예정·연혁) + **개정 전후 조문 비교**(before/after) + 1일 1회 배치 동기화
 - [x] **Node 연동 준비** — Node(메인)→FastAPI 서버-서버 호출 구조(CORS 불필요) + `fetch` SSE·multipart [호출 예제](#node-호출-예제)
 - [ ] 프론트엔드(React 챗 UI·대시보드 UI) — 미구현(이 백엔드 API를 호출만 하면 됨)
@@ -45,7 +45,7 @@
 |---|---|---|
 | 🟢 **프론트용** | `POST /chat/stream` | AI 질의응답 챗봇(SSE 스트리밍) |
 | 🟢 **프론트용** | `POST /documents/review` | PDF/텍스트 위험 검토 + before/after 수정안 |
-| 🟢 **프론트용** | `POST /chat/checklist` | '체크리스트 생성' 버튼 — 전체 대화 → 법적 대응 체크리스트 |
+| 🟢 **프론트용** | `POST /chat/checklist` | '체크리스트 생성' 버튼 — 대화+PDF검토 종합 → 통합 체크리스트 |
 | 챗봇(단발) | `POST /chat` | 위와 동일, JSON 한 번에 반환(느림) |
 | 코어 | `POST /v1/retrieve` | 하이브리드 RAG 검색 |
 | 코어 | `POST /v1/source-pack` | LLM 인용용 근거 마크다운 번들 |
@@ -89,7 +89,10 @@
 
 ### 1. `POST /chat/stream` — AI 챗봇 (SSE) 🟢
 
-질문 → 하이브리드 근거검색 → **gpt-5.5** 답변(근거 `[n]` 강제 인용) → **Citation Firewall** 자동검증.
+질문 → **도메인 라우터(3-tier)** → 하이브리드 근거검색 → **gpt-5.5** 답변(근거 `[n]` 강제 인용) → **Citation Firewall** 자동검증.
+> **도메인 라우터**(`app/domain_router.py`): 결정론적 키워드 규칙으로 대부분 분류(LLM 호출 0), 모호한 중간만 제약 LLM 1회. 회귀 테스트는 `tests/test_domain_router.py`.
+> - **Tier 1** 일반 개인정보/정보통신망(의료 맥락 없음) → 답변 · **Tier 2** 의료·헬스케어(의료법·생명윤리·의료광고·환자·건강정보, 또는 프라이버시가 헬스케어로 번짐) → 답변(핵심) · **Tier 3** 무관(부동산·노동·날씨·코딩) → 거절(`sources:[]`·`method:"none"`).
+> - Tier 2 모호(예 "사무실 CCTV")는 답변 끝에 **되묻기 한 줄**(needs_clarification) 부착. 멀티턴 후속질문은 맥락으로 판정.
 단발 JSON이 필요하면 동일 body로 `POST /chat`(아래 응답 본문과 같은 형태, 완답까지 기다림 → UI는 첫 글자가 ~2초에 뜨는 스트리밍 권장. [성능](#성능-실측) 참고).
 
 **요청** `Content-Type: application/json`
@@ -135,8 +138,9 @@ curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
 
 ### 2. `POST /documents/review` — 능동형 PDF 에디터 🟢
 
-문서(PDF/텍스트) → 텍스트 추출(**스캔본은 비전 OCR fallback**) → 세그먼트 분할 → 세그먼트별 RAG → **gpt-5.5** 위험 분석 → Citation Firewall.
+문서(PDF/텍스트) → 텍스트 추출(**스캔본은 비전 OCR fallback**) → **세그먼트별 RAG(코어 검색)로 코드가 근거 확보** → **gpt-5.5는 위반여부·사유·대안·risk_level만** → Citation Firewall.
 결과로 **before/after**(원문 ↔ 수정본)와 위험 세그먼트별 사유·대안·근거를 돌려줍니다.
+> **LLM에 전부 위임하지 않음**: 어느 근거가 어느 finding에 붙는지는 LLM이 번호로 고르지 않고 **코드의 세그먼트별 검색 결과가 결정**한다(인용 오연결·환각 방지). LLM은 자연어 판단·문구만, 인덱스·인용 연결 등 수치/구조는 코드가 산출.
 
 **요청** `Content-Type: multipart/form-data` — `file`(PDF) **또는** `text` 중 하나 필수
 
@@ -192,21 +196,25 @@ curl -X POST localhost:8077/documents/review -F "text=부작용 전혀 없는 10
 
 ---
 
-### 2-B. `POST /chat/checklist` — 대화 종료 후 체크리스트 🟢
+### 2-B. `POST /chat/checklist` — 통합 체크리스트(대화 + PDF) 🟢
 
-'체크리스트 생성' 버튼용. 그동안의 **전체 대화**(`history`)를 받아 → 대화에서 **법적 쟁점을 추출**(LLM) → 쟁점별 **RAG 근거검색** → **gpt-5.5**가 "사용자가 법적으로 대응·준비하려면 추가로 확인해야 할 항목"을 근거 기반으로 생성. 무상태(대화는 클라이언트 보관).
+'체크리스트 생성' 버튼용. 한 세션의 **챗봇 대화(`history`) + PDF 검토 결과(`reviews`)를 함께** 받아 → 법적 쟁점 추출(LLM) → 쟁점별 **RAG 근거검색** → **gpt-5.5**가 "법적으로 대응·준비하려면 추가로 확인할 항목"을 근거 기반으로 통합 생성. 무상태(클라이언트가 보관·전달).
 
-> 종료 감지는 서버가 안 함 — 프론트의 버튼 클릭(또는 세션 닫힘 시 flush)이 트리거. 무상태라 history만 받으면 됨.
+> 종료 감지는 서버가 안 함 — 프론트의 버튼 클릭이 트리거. `history`·`reviews` **둘 중 하나 이상** 있으면 됨(둘 다 비면 400).
 
 **요청** `Content-Type: application/json`
 ```json
 {
-  "history": [                 // 전체 대화(필수)
+  "history": [                 // 챗봇 대화(선택) — history·reviews 중 하나는 필수
     {"role": "user", "content": "환자 시술 전후 사진을 블로그 광고에 쓰려는데요"},
     {"role": "assistant", "content": "..."}
   ],
+  "reviews": [                 // PDF 검토 결과(선택) — /documents/review 응답을 그대로 되돌려줌
+    {"original_text": "부작용 전혀 없는 100% 안전한 시술",
+     "findings": [{"segment_text": "...", "risk_level": "high", "issue": "과장광고 소지", "suggestion": "..."}]}
+  ],
   "top_k": 6,                  // 쟁점별 근거 검색 수(1~20)
-  "max_topics": 5,             // 대화에서 추출할 법적 쟁점 수(1~8)
+  "max_topics": 5,             // 추출할 법적 쟁점 수(1~8)
   "as_of": null,               // 시점 조회(선택)
   "lang": "auto",              // auto|ko|en
   "prev_checklist": null       // 직전 checklist 배열 재전달 시 사용자 status/note 보존(재생성)

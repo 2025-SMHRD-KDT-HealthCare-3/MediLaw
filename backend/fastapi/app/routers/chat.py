@@ -10,7 +10,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app import llm
+from app import domain_router, llm
 from app.auth import require_api_key
 from app.citations import extract_and_verify, summarize
 from app.english import detect_lang, english_article
@@ -58,6 +58,31 @@ SYSTEM_PROMPT_EN = (
 _NO_EVIDENCE = "제공된 자료로는 확인되지 않습니다. 질문을 더 구체화해 주세요.\n※ 본 답변은 법률 자문이 아니라 정보 제공입니다."
 _NO_EVIDENCE_EN = ("This cannot be confirmed from the provided materials. Please make your question more specific.\n"
                    "* This response is informational, not legal advice.")
+
+# 도메인 밖(잡담·코딩·날씨 등) 질문 거절 메시지 — RAG/생성 없이 즉시 반환.
+_OUT_OF_DOMAIN = (
+    "저는 의료법·개인정보보호법·생명윤리법·정보통신망법 등 의료·헬스케어 컴플라이언스 "
+    "관련 질문만 도와드립니다. 관련 질문을 해주세요.\n"
+    "※ 본 답변은 법률 자문이 아니라 정보 제공입니다."
+)
+_OUT_OF_DOMAIN_EN = (
+    "I can only help with medical/healthcare compliance questions under Korean law "
+    "(Medical Service Act, Personal Information Protection Act, Bioethics and Safety Act, "
+    "Network Act, etc.). Please ask a related question.\n"
+    "* This response is informational, not legal advice."
+)
+
+
+# needs_clarification(Tier 2 모호)일 때 답변 끝에 붙이는 되묻기 한 줄.
+_CLARIFY = "\n\n※ 의료기관·환자·건강정보와 관련된 상황이라면 구체적으로 알려주시면 더 정확히 답변드립니다."
+_CLARIFY_EN = ("\n\n* If this concerns a medical institution, patients, or health data, "
+               "please specify for a more precise answer.")
+
+
+def _domain_route(req: ChatRequest) -> dict:
+    """3-tier 도메인 라우팅. {tier, needs_clarification, source}."""
+    history = [{"role": t.role, "content": t.content} for t in req.history[-MAX_HISTORY:]]
+    return domain_router.route(req.question, history)
 
 
 def _build(req: ChatRequest):
@@ -119,6 +144,13 @@ def _citation_check(answer: str, as_of) -> VerifyResponse:
 
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 def chat(req: ChatRequest):
+    lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
+    decision = _domain_route(req)
+    if not domain_router.is_in_scope(decision):  # Tier 3 → 거절
+        refusal = _OUT_OF_DOMAIN_EN if lang == "en" else _OUT_OF_DOMAIN
+        return ChatResponse(answer=refusal, sources=[], method="none", lang=lang,
+                            search_query=req.question,
+                            citation_check=_citation_check("", req.as_of), as_of=req.as_of)
     messages, sources, method, lang, search_q = _build(req)
     no_ev = _NO_EVIDENCE_EN if lang == "en" else _NO_EVIDENCE
     if messages is None:
@@ -129,6 +161,8 @@ def chat(req: ChatRequest):
         answer = llm.chat(messages)
     except llm.LLMUnavailable as e:
         raise HTTPException(503, str(e))
+    if decision["needs_clarification"]:  # Tier 2 모호 → 답변 끝에 되묻기 한 줄
+        answer += _CLARIFY_EN if lang == "en" else _CLARIFY
     return ChatResponse(
         answer=answer, sources=sources, method=method, lang=lang, search_query=search_q,
         citation_check=_citation_check(answer, req.as_of), as_of=req.as_of,
@@ -141,6 +175,19 @@ def _sse(obj: dict) -> str:
 
 @router.post("/chat/stream", dependencies=[Depends(require_api_key)])
 def chat_stream(req: ChatRequest):
+    lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
+    decision = _domain_route(req)
+    if not domain_router.is_in_scope(decision):  # Tier 3 → 거절
+        refusal = _OUT_OF_DOMAIN_EN if lang == "en" else _OUT_OF_DOMAIN
+
+        def gen_refuse():
+            yield _sse({"type": "sources", "method": "none", "lang": lang,
+                        "search_query": req.question, "sources": []})
+            yield _sse({"type": "token", "text": refusal})
+            yield _sse({"type": "done", "citation_check": _citation_check("", req.as_of).model_dump()})
+
+        return StreamingResponse(gen_refuse(), media_type="text/event-stream")
+
     messages, sources, method, lang, search_q = _build(req)
 
     def gen():
@@ -158,6 +205,8 @@ def chat_stream(req: ChatRequest):
         except llm.LLMUnavailable as e:
             yield _sse({"type": "error", "message": str(e)})
             return
+        if decision["needs_clarification"]:  # Tier 2 모호 → 되묻기 한 줄 추가 토큰
+            yield _sse({"type": "token", "text": _CLARIFY_EN if lang == "en" else _CLARIFY})
         answer = "".join(parts)
         yield _sse({"type": "done", "citation_check": _citation_check(answer, req.as_of).model_dump()})
 
@@ -170,41 +219,88 @@ def chat_stream(req: ChatRequest):
 
 CHECKLIST_SYSTEM = (
     "당신은 한국 의료·헬스케어 사업자의 법률 컴플라이언스 조력자입니다.\n"
-    "[대화]는 사용자와 의료법 챗봇의 전체 대화이고, [근거]는 그와 관련해 검색된 "
-    "법령·판례·해석례·가이드라인(번호 매김)입니다.\n"
-    "대화에서 드러난 사용자의 상황을 바탕으로, 사용자가 '법적으로 대응·준비하기 위해' "
-    "추가로 확인·검토·조치해야 할 항목을 능동형 체크리스트로 만드세요.\n"
+    "[대화]는 사용자와 의료법 챗봇의 전체 대화(있을 때), [문서 검토 결과]는 사용자가 올린 "
+    "문서(광고문구·동의서·약관 등)에서 발견된 위험 세그먼트·위험사유·위험도(있을 때), "
+    "[근거]는 그와 관련해 검색된 법령·판례·해석례·가이드라인(번호 매김)입니다.\n"
+    "대화와 문서 검토에서 드러난 상황 '전체를 종합'해, 사용자가 '법적으로 대응·준비하기 위해' "
+    "추가로 확인·검토·조치해야 할 항목을 하나의 통합 능동형 체크리스트로 만드세요.\n"
     "규칙:\n"
     "1. 각 항목은 사용자가 실제로 수행/확인할 행동이어야 합니다"
-    "(예: '환자 동의서에 민감정보 별도 동의 문구가 있는지 확인').\n"
+    "(예: '환자 동의서에 민감정보 별도 동의 문구가 있는지 확인', "
+    "'광고문구의 절대적 안전성 단정 표현을 수정').\n"
     "2. 판단과 reason 은 반드시 [근거]에 있는 내용에만 기반하세요. 근거 없는 추측 금지.\n"
     "3. 각 항목: id(짧은 영문 슬러그), title(확인/대응할 것), reason(왜 필요한지+근거), "
     "status(기본 todo), citations(사용한 [근거] 번호 정수배열).\n"
     "4. [이전체크리스트]가 주어지면 대조해 change(kept/added/updated/removed)를 표시하고 "
     "이전 id 를 유지하세요. 사용자가 ok/na 로 둔 항목은 그대로 유지(todo 로 되돌리지 마세요).\n"
-    "5. 일반론·중복은 빼고 이 대화에 특화된 항목만. 최대 8개.\n"
+    "5. 일반론·중복은 빼고 이 대화·문서에 특화된 항목만. 최대 8개.\n"
     '6. 반드시 JSON: {"checklist":[{"id":"sensitive-consent","title":"...","reason":"...",'
     '"status":"todo","change":"added","citations":[1]}]}'
 )
 
 CHECKLIST_SYSTEM_EN = (
     "You assist a Korean healthcare business with legal compliance.\n"
-    "[Conversation] is the full chat between the user and a medical-law bot; [Sources] are the "
-    "related statutes/precedents/interpretations/guidelines (numbered).\n"
-    "Based on the user's situation in the conversation, build an actionable checklist of things the "
-    "user should additionally verify/prepare to respond legally.\n"
+    "[Conversation] is the full chat between the user and a medical-law bot (when present); "
+    "[Document Review] lists risky segments, risk reasons, and risk levels found in documents the "
+    "user uploaded (ads/consent forms/terms, when present); [Sources] are the related "
+    "statutes/precedents/interpretations/guidelines (numbered).\n"
+    "Synthesizing the WHOLE situation from both the conversation and the document review, build a "
+    "single unified actionable checklist of things the user should additionally verify/prepare to "
+    "respond legally.\n"
     "Rules:\n"
     "1. Each item is a concrete action/check the user performs (e.g. 'Verify the consent form has a "
-    "separate sensitive-data consent clause').\n"
+    "separate sensitive-data consent clause', 'Fix the ad copy's absolute-safety claim').\n"
     "2. Base every judgment and reason ONLY on [Sources]. No speculation.\n"
     "3. Each item: id (short english slug), title (what to check/do), reason (why + grounds), "
     "status (default todo), citations ([source] number int array).\n"
     "4. If [PreviousChecklist] is given, reconcile and set change (kept/added/updated/removed), reuse "
     "previous ids, and keep user-set ok/na items as-is (do not reset to todo).\n"
-    "5. No generic/duplicate items — only items specific to this conversation. Max 8.\n"
+    "5. No generic/duplicate items — only items specific to this conversation/document. Max 8.\n"
     '6. Respond ONLY as JSON: {"checklist":[{"id":"sensitive-consent","title":"...","reason":"...",'
     '"status":"todo","change":"added","citations":[1]}]}'
 )
+
+
+def _extract_findings(reviews) -> list[dict]:
+    """reviews(느슨한 dict 목록)에서 위험 finding 을 방어적으로 평탄화. 누락 필드 무시."""
+    out: list[dict] = []
+    if not reviews:
+        return out
+    for rv in reviews:
+        if not isinstance(rv, dict):
+            continue
+        for f in rv.get("findings") or []:
+            if not isinstance(f, dict):
+                continue
+            seg = str(f.get("segment_text") or "").strip()
+            issue = str(f.get("issue") or "").strip()
+            if not seg and not issue:
+                continue
+            out.append({
+                "segment_text": seg,
+                "issue": issue,
+                "risk_level": str(f.get("risk_level") or "").strip(),
+                "suggestion": str(f.get("suggestion") or "").strip(),
+            })
+    return out
+
+
+def _findings_block(findings: list[dict], lang: str) -> str:
+    """LLM 프롬프트용 [문서 검토 결과] 블록. findings 없으면 빈 문자열."""
+    if not findings:
+        return ""
+    lines = []
+    for f in findings:
+        lvl = f"[{f['risk_level']}] " if f["risk_level"] else ""
+        seg = f["segment_text"]
+        issue = f["issue"]
+        if lang == "en":
+            lines.append(f"- {lvl}\"{seg}\" → {issue}" if seg else f"- {lvl}{issue}")
+        else:
+            lines.append(f"- {lvl}\"{seg}\" → {issue}" if seg else f"- {lvl}{issue}")
+    body = "\n".join(lines)
+    label = "[Document Review]" if lang == "en" else "[문서 검토 결과]"
+    return f"\n\n{label}\n{body}"
 
 
 def _derive_queries(convo: str, max_n: int) -> list[str]:
@@ -253,18 +349,31 @@ def _gather_for_queries(queries: list[str], top_k: int, as_of, lang: str):
 
 @router.post("/chat/checklist", response_model=ChecklistResponse, dependencies=[Depends(require_api_key)])
 def chat_checklist(req: ChecklistRequest):
-    if not req.history:
-        raise HTTPException(400, "history(대화)가 비어 있습니다.")
+    findings = _extract_findings(req.reviews)
+    if not req.history and not findings:
+        raise HTTPException(400, "대화나 문서 검토 결과 중 하나는 필요합니다.")
+
     user_text = " ".join(t.content for t in req.history if t.role == "user").strip()
-    lang = req.lang if req.lang in ("ko", "en") else detect_lang(user_text)
+    # 언어 감지 — 대화가 있으면 대화, 없으면 문서 위험요약 기준
+    lang_basis = user_text or " ".join(f["issue"] or f["segment_text"] for f in findings).strip()
+    lang = req.lang if req.lang in ("ko", "en") else detect_lang(lang_basis)
     convo = "\n".join(f"{t.role}: {t.content}" for t in req.history)
 
-    # 1) 대화 → 법적 쟁점 질의 추출 (실패 시 사용자 발화를 단일 질의로 폴백)
-    queries = _derive_queries(convo, req.max_topics)
+    # 문서 위험요약(쟁점 추출 입력용 + LLM 프롬프트용)
+    risk_summary = "\n".join(
+        f"- {f['segment_text']} → {f['issue']}" if f["segment_text"] else f"- {f['issue']}"
+        for f in findings)
+
+    # 1) 대화 + 문서 위험 → 법적 쟁점 질의 추출 (실패 시 발화/위험요약을 단일 질의로 폴백)
+    derive_input = convo
+    if risk_summary:
+        derive_input = (derive_input + "\n\n[문서 위험요약]\n" + risk_summary).strip()
+    queries = _derive_queries(derive_input, req.max_topics)
     if not queries:
-        queries = [user_text[:300]] if user_text else []
+        fallback = (user_text or risk_summary).strip()
+        queries = [fallback[:300]] if fallback else []
     if not queries:
-        raise HTTPException(400, "대화에서 검색할 쟁점을 찾지 못했습니다.")
+        raise HTTPException(400, "대화·문서에서 검색할 쟁점을 찾지 못했습니다.")
 
     # 2) 쟁점별 RAG 근거 검색
     sources, by_n, method = _gather_for_queries(queries, req.top_k, req.as_of, lang)
@@ -289,17 +398,20 @@ def chat_checklist(req: ChecklistRequest):
             label = "[PreviousChecklist]" if lang == "en" else "[이전체크리스트]"
             prev_block = f"\n\n{label}\n{json.dumps(slim, ensure_ascii=False)}"
 
-    # 3) LLM이 근거 기반 체크리스트 생성
+    # 3) LLM이 대화+문서 근거 기반 통합 체크리스트 생성
+    doc_block = _findings_block(findings, lang)
     if lang == "en":
         ev = "\n\n".join(
             f"[{s.n}] {s.label_en} (official English)\n{s.snippet_en}" if s.is_official_en
             else f"[{s.n}] {s.label} (Korean source)\n{s.snippet}" for s in sources)
+        convo_block = f"[Conversation]\n{convo}\n\n" if convo else ""
         messages = [{"role": "system", "content": CHECKLIST_SYSTEM_EN},
-                    {"role": "user", "content": f"[Conversation]\n{convo}\n\n[Sources]\n{ev}{prev_block}"}]
+                    {"role": "user", "content": f"{convo_block}[Sources]\n{ev}{doc_block}{prev_block}".lstrip()}]
     else:
         ev = "\n\n".join(f"[{s.n}] {s.label}\n{s.snippet}" for s in sources)
+        convo_block = f"[대화]\n{convo}\n\n" if convo else ""
         messages = [{"role": "system", "content": CHECKLIST_SYSTEM},
-                    {"role": "user", "content": f"[대화]\n{convo}\n\n[근거]\n{ev}{prev_block}"}]
+                    {"role": "user", "content": f"{convo_block}[근거]\n{ev}{doc_block}{prev_block}".lstrip()}]
     try:
         data = llm.chat_json(messages)
     except llm.LLMUnavailable as e:

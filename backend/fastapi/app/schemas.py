@@ -201,10 +201,15 @@ class ReviewResponse(BaseModel):
 
 # ---------- /chat/checklist (대화 종료 후 능동형 체크리스트) ----------
 class ChecklistRequest(BaseModel):
-    """'체크리스트 생성' 버튼 — 그동안의 전체 대화로 법적 대응 체크리스트를 만든다."""
-    history: list[ChatTurn] = Field(description="전체 대화(무상태 — 클라이언트가 보관·전달)")
+    """'체크리스트 생성' 버튼 — 대화 + PDF 문서검토를 종합해 통합 법적 대응 체크리스트를 만든다."""
+    history: list[ChatTurn] = Field(
+        default_factory=list, description="전체 대화(무상태 — 클라이언트가 보관·전달, 없으면 문서만으로 생성)")
+    reviews: Optional[list[dict]] = Field(
+        None,
+        description="PDF 문서검토(/documents/review) 응답들. 각 dict에서 original_text·findings"
+                    "(segment_text/risk_level/issue/suggestion)를 방어적으로 파싱(누락 필드 무시)")
     top_k: int = Field(6, ge=1, le=20, description="쟁점별 근거 검색 개수")
-    max_topics: int = Field(5, ge=1, le=8, description="대화에서 추출할 법적 쟁점 수")
+    max_topics: int = Field(5, ge=1, le=8, description="대화·문서에서 추출할 법적 쟁점 수")
     as_of: Optional[str] = None
     lang: Lang = Field("auto", description="응답 언어. auto=대화 언어 자동감지")
     prev_checklist: Optional[list[dict]] = Field(

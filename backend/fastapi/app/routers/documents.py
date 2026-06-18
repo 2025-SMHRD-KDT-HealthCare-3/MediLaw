@@ -40,49 +40,54 @@ SYSTEM_PROMPT = (
     "당신은 한국 의료·헬스케어 사업자의 문서(광고문구·환자 동의서·약관·홍보물)를 "
     "의료법·개인정보보호법·생명윤리법·정보통신망법 및 관련 판례·해석례·가이드라인에 비추어 "
     "위반 소지를 점검하는 컴플라이언스 검토자입니다.\n"
-    "[세그먼트]는 번호가 매겨진 문서 조각, [근거]는 번호가 매겨진 법령·판례·가이드라인입니다.\n"
+    "[세그먼트]는 번호가 매겨진 문서 조각이며, 각 세그먼트 아래에 그 세그먼트에 대해 "
+    "미리 검색해 둔 [근거](법령·판례·가이드라인)가 함께 붙어 있습니다.\n"
     "규칙:\n"
     "1. 위반·과장·오해소지가 있는 세그먼트만 골라 보고하세요(문제 없으면 findings 에서 제외).\n"
-    "2. 판단은 반드시 [근거]에 있는 내용에만 근거하세요. 근거 없는 추측 금지.\n"
-    "3. 각 항목의 citations 에는 사용한 [근거] 번호만 정수 배열로 넣으세요.\n"
+    "2. 판단은 반드시 그 세그먼트에 붙은 [근거]에 있는 내용에만 근거하세요. 근거 없는 추측 금지.\n"
+    "3. 근거 연결은 시스템이 자동으로 처리하므로, 당신은 근거 번호나 citations 를 출력하지 마세요. "
+    "issue/suggestion 본문에 근거 내용을 자연어로 녹여 설명하면 됩니다.\n"
     "4. issue 는 위험 사유 설명. suggestion 은 그 세그먼트를 '그대로 대체할' 실제 수정 문구만 "
     "한국어로 쓰세요(‘~하세요’ 같은 지시·설명·따옴표 없이 광고/문서에 바로 넣을 문장 자체).\n"
     "5. risk_level 은 high/medium/low 중 하나.\n"
     "6. 또한 'checklist'(능동형 확인목록)를 만드세요 — 사람이 이 문서에서 추가로 확인해야 할 항목.\n"
     "   각 항목: id(짧은 영문 슬러그), title(확인할 것), reason(왜), status(todo|ok|risk|na), "
-    "segment_index(관련 세그먼트, 없으면 null), citations(근거 [번호] 정수배열).\n"
+    "segment_index(관련 세그먼트, 없으면 null). 근거 연결은 시스템이 처리하니 citations 는 출력하지 마세요.\n"
     "   [이전체크리스트]가 주어지면 대조해 change 표시: 유지=kept, 새로추가=added, 내용바뀜=updated, "
     "더이상 불필요=removed. 유지·갱신 항목은 이전 id 를 그대로 쓰세요. 이전이 없으면 모두 added.\n"
     "   이전 항목의 status 는 사용자가 직접 설정한 값일 수 있습니다 — ok/na 로 표시된 항목은 사용자가 "
     "확인·해소한 것이니 문서가 명백히 위반하지 않는 한 그 status 를 유지하고 todo 로 되돌리지 마세요.\n"
     '7. 반드시 다음 JSON 형식으로만 응답: {"findings":[{"segment_index":0,"risk_level":"high",'
-    '"issue":"...","suggestion":"...","citations":[1]}],"checklist":[{"id":"first-claim",'
-    '"title":"...","reason":"...","status":"todo","change":"added","segment_index":0,"citations":[1]}]}'
+    '"issue":"...","suggestion":"..."}],"checklist":[{"id":"first-claim",'
+    '"title":"...","reason":"...","status":"todo","change":"added","segment_index":0}]}'
 )
 
 SYSTEM_PROMPT_EN = (
     "You review a Korean healthcare business document (ad copy, patient consent form, terms) for "
     "compliance risk under Korean law (Medical Service Act, Personal Information Protection Act, "
     "Bioethics and Safety Act, Network Act) and related precedents/interpretations/guidelines.\n"
-    "[Segments] are numbered document fragments; [Sources] are numbered statutes/precedents/guidelines.\n"
+    "[Segments] are numbered document fragments; under each segment are the [Sources] "
+    "(statutes/precedents/guidelines) pre-retrieved for that specific segment.\n"
     "Rules:\n"
     "1. Report only segments that are violating, exaggerated, or misleading (omit clean ones).\n"
-    "2. Base judgments ONLY on [Sources]. No speculation.\n"
-    "3. In citations put only the [Source] numbers used, as an integer array.\n"
+    "2. Base judgments ONLY on the [Sources] attached to that segment. No speculation.\n"
+    "3. Source linking is handled automatically by the system — do NOT output source numbers or a "
+    "citations field. Weave the source content into your issue/suggestion prose in natural language.\n"
     "4. 'issue' explains the risk. 'suggestion' is the actual replacement text to drop into the "
     "document (the sentence itself, in the document's language — no instructions or quotes).\n"
-    "   Sources marked '(official English)' are official statute translations; cite their names exactly.\n"
+    "   Sources marked '(official English)' are official statute translations.\n"
     "5. risk_level is one of high/medium/low.\n"
     "6. Also build a 'checklist' — items a human should additionally verify for this document.\n"
     "   Each item: id (short english slug), title (what to check), reason (why), "
-    "status (todo|ok|risk|na), segment_index (related segment or null), citations ([source] int array).\n"
+    "status (todo|ok|risk|na), segment_index (related segment or null). Do NOT output a citations "
+    "field — source linking is handled by the system.\n"
     "   If [PreviousChecklist] is given, reconcile and set change: kept, added, updated, or removed "
     "(no longer needed). Reuse the previous id for kept/updated items. If none given, all are added.\n"
     "   A previous item's status may have been set by the user — keep ok/na items as-is (the user "
     "resolved them) unless the document clearly still violates; do not reset them to todo.\n"
     '7. Respond ONLY in this JSON format: {"findings":[{"segment_index":0,"risk_level":"high",'
-    '"issue":"...","suggestion":"...","citations":[1]}],"checklist":[{"id":"first-claim",'
-    '"title":"...","reason":"...","status":"todo","change":"added","segment_index":0,"citations":[1]}]}'
+    '"issue":"...","suggestion":"..."}],"checklist":[{"id":"first-claim",'
+    '"title":"...","reason":"...","status":"todo","change":"added","segment_index":0}]}'
 )
 
 
@@ -142,20 +147,28 @@ def _segment(text: str) -> list[str]:
 
 
 def _gather_evidence(segments: list[str], top_k: int, as_of, lang: str = "ko"):
-    """세그먼트별 검색 → (전역번호 ChatSource 목록, n→source 맵, method).
+    """세그먼트별 검색 → (전역 ChatSource 풀, seg_idx→[ChatSource] 매핑, method).
+
+    핵심: **세그먼트별 근거 매핑을 코드가 보유**한다. 어느 근거가 어느 세그먼트(=어느
+    finding)에 붙는지는 LLM이 아니라 이 검색 결과가 결정한다. 전역 풀(stable [n])은
+    프롬프트 표시·dedup 용으로만 쓰고, 동일 출처는 모든 세그먼트에서 같은 ChatSource 객체를
+    공유해 번호가 일관되게 유지된다.
 
     lang=='en' 이면 검색용으로 세그먼트를 한국어 번역, 법령엔 공식 영문 부착.
     """
     by_key: dict[tuple[str, int], ChatSource] = {}
+    per_segment: list[list[ChatSource]] = [[] for _ in segments]
     method = "fts"
-    for seg in segments:
+    for i, seg in enumerate(segments):
         search_seg = llm.translate(seg, "ko") if lang == "en" else seg
         hits, m = hybrid_search(search_seg, None, top_k=top_k, as_of=as_of)
         if m == "hybrid":
             method = "hybrid"
+        seen_here: set[tuple[str, int]] = set()
         for h in hits:
             key = (h.source_type, h.source_id)
-            if key not in by_key:
+            s = by_key.get(key)
+            if s is None:
                 s = ChatSource(
                     n=len(by_key) + 1, label=h.label, source_type=h.source_type,
                     source_id=h.source_id, snippet=h.snippet,
@@ -168,8 +181,11 @@ def _gather_evidence(segments: list[str], top_k: int, as_of, lang: str = "ko"):
                         s.snippet_en = en["body_en"]
                         s.is_official_en = True
                 by_key[key] = s
+            if key not in seen_here:  # 세그먼트 내 dedup, 검색 순위 유지
+                seen_here.add(key)
+                per_segment[i].append(s)
     sources = list(by_key.values())
-    return sources, {s.n: s for s in sources}, method
+    return sources, per_segment, method
 
 
 def _citation_check(text: str, as_of) -> VerifyResponse:
@@ -185,7 +201,7 @@ def _review(text: str, as_of, top_k: int, extracted_by: str = "text",
     if lang not in ("ko", "en"):
         lang = detect_lang(text)
 
-    sources, by_n, method = _gather_evidence(segments, top_k, as_of, lang)
+    sources, per_segment, method = _gather_evidence(segments, top_k, as_of, lang)
     if not sources:
         return ReviewResponse(original_text=text, revised_text=text,
                               segments=segments, findings=[], checklist=[], extracted_by=extracted_by,
@@ -207,22 +223,32 @@ def _review(text: str, as_of, top_k: int, extracted_by: str = "text",
         label = "[PreviousChecklist]" if lang == "en" else "[이전체크리스트]"
         prev_block = f"\n\n{label}\n{json.dumps(slim, ensure_ascii=False)}"
 
-    seg_block = "\n".join(f"[{i}] {s}" for i, s in enumerate(segments))
+    # 세그먼트별 근거를 그 세그먼트 바로 아래 묶어 1회 호출 — 어느 근거가 어느 세그먼트에
+    # 붙는지는 코드가 정한 per_segment 매핑이 결정한다(LLM은 번호를 고르지 않음).
     if lang == "en":
-        ev_block = "\n\n".join(
-            f"[{s.n}] {s.label_en} (official English)\n{s.snippet_en}" if s.is_official_en
-            else f"[{s.n}] {s.label} (Korean source)\n{s.snippet}"
-            for s in sources
-        )
+        def _ev_line(s: ChatSource) -> str:
+            if s.is_official_en:
+                return f"  - {s.label_en} (official English): {s.snippet_en}"
+            return f"  - {s.label} (Korean source): {s.snippet}"
+
+        blocks = []
+        for i, seg in enumerate(segments):
+            ev = "\n".join(_ev_line(s) for s in per_segment[i]) or "  - (no source found)"
+            blocks.append(f"[{i}] {seg}\n  Sources for this segment:\n{ev}")
+        body_block = "\n\n".join(blocks)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT_EN},
-            {"role": "user", "content": f"[Segments]\n{seg_block}\n\n[Sources]\n{ev_block}{prev_block}"},
+            {"role": "user", "content": f"[Segments with their Sources]\n{body_block}{prev_block}"},
         ]
     else:
-        ev_block = "\n\n".join(f"[{s.n}] {s.label}\n{s.snippet}" for s in sources)
+        blocks = []
+        for i, seg in enumerate(segments):
+            ev = "\n".join(f"  - {s.label}: {s.snippet}" for s in per_segment[i]) or "  - (근거 없음)"
+            blocks.append(f"[{i}] {seg}\n  이 세그먼트의 근거:\n{ev}")
+        body_block = "\n\n".join(blocks)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"[세그먼트]\n{seg_block}\n\n[근거]\n{ev_block}{prev_block}"},
+            {"role": "user", "content": f"[세그먼트와 근거]\n{body_block}{prev_block}"},
         ]
     try:
         data = llm.chat_json(messages)
@@ -237,14 +263,15 @@ def _review(text: str, as_of, top_k: int, extracted_by: str = "text",
             continue
         if not 0 <= idx < len(segments):
             continue
-        cites = [by_n[n] for n in f.get("citations", []) if n in by_n]
+        # 근거 연결은 코드가 담당: 이 세그먼트에 대해 검색해 둔 근거를 그대로 붙인다.
+        # (LLM이 고른 번호가 아니라 per_segment 검색 결과 — 오연결·환각 차단)
         findings.append(ReviewFinding(
             segment_index=idx,
             segment_text=segments[idx],
             risk_level=f.get("risk_level", "medium"),
             issue=f.get("issue", ""),
             suggestion=f.get("suggestion", ""),
-            citations=cites,
+            citations=list(per_segment[idx]),
         ))
 
     # 능동형 체크리스트 파싱 (사용자 note 보존 + 상태 요약)
@@ -264,7 +291,8 @@ def _review(text: str, as_of, top_k: int, extracted_by: str = "text",
             status=status,
             change=c.get("change") if c.get("change") in ("added", "kept", "updated", "removed") else "added",
             segment_index=si,
-            citations=[by_n[n] for n in c.get("citations", []) if n in by_n],
+            # 근거 연결은 코드가 담당: 연관 세그먼트가 있으면 그 세그먼트 근거를 붙인다.
+            citations=list(per_segment[si]) if si is not None else [],
             note=c.get("note") or prev_notes.get(cid, ""),  # 사용자 메모 보존
         ))
         setattr(summary, status, getattr(summary, status) + 1)
