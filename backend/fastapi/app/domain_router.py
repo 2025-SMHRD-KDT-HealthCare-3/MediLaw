@@ -49,7 +49,12 @@ def _contains(text: str, vocab: list[str]) -> bool:
 
 
 # ── 2. 1차: 결정론적 규칙 (확신 시 tier, 아니면 None → LLM) ─────────────────────
-def rule_based_route(question: str):
+def rule_based_route(question: str, has_history: bool = False):
+    """확신 가능한 경우만 tier(1|2|3) 반환, 모호하면 None(→ LLM 위임).
+
+    has_history=True 이면 키워드 없는 짧은 후속질문("그럼 처벌은?")을 하드 거절하지 않고
+    LLM(맥락 보유)에 위임한다 — 멀티턴 후속이 거절되는 것을 방지.
+    """
     has_med = _contains(question, MEDICAL_TRIGGERS)
     has_priv = _contains(question, PRIVACY_NET_ANCHORS)
     is_ambiguous = _contains(question, AMBIGUITY_FLAGS)
@@ -58,8 +63,8 @@ def rule_based_route(question: str):
         return 2
     if has_priv and not is_ambiguous:             # 순수 일반 개인정보/정보통신(번질 여지 없음)
         return 1
-    if not has_priv and not has_med:              # 프라이버시도 의료도 아님 → 범위 밖
-        return 3
+    if not has_priv and not has_med:              # 키워드 없음
+        return None if has_history else 3         # 대화 중이면 후속일 수 있어 LLM에 위임
     return None                                   # priv + 모호 플래그 → LLM 위임
 
 
@@ -105,7 +110,7 @@ def llm_classify(question: str, history: list[dict] | None = None) -> tuple[int,
 # ── 4. 오케스트레이터 ─────────────────────────────────────────────────────────
 def route(question: str, history: list[dict] | None = None) -> dict:
     """{tier, needs_clarification, source('rule'|'llm')}. 규칙으로 끝나면 LLM 호출 0."""
-    t = rule_based_route(question)
+    t = rule_based_route(question, has_history=bool(history))
     if t is not None:
         return {"tier": t, "needs_clarification": False, "source": "rule"}
     tier, needs = llm_classify(question, history)
