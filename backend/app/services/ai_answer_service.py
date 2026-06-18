@@ -1,19 +1,103 @@
 from sqlalchemy.orm import Session
+import httpx
+from fastapi import HTTPException, status
 
-from app.ai.citation_extractor import extract_citations_stub
-from app.ai.citation_verifier import verify_citation_stub
-from app.ai.llm_client import generate_mock_answer
-from app.ai.rag_service import retrieve_sources_stub
+from app.core.config import settings
 from app.models.user import User
 from app.repositories import chat_repository, evidence_repository, verification_repository
 from app.schemas.chat_schema import ChatCreate
 from app.schemas.evidence_schema import EvidenceCreate
 from app.schemas.verification_schema import VerificationCreate
+from app.services.hms_mapping import (
+    clamp_score,
+    map_verification_status,
+    parse_law_label,
+    verification_reason,
+)
 from app.services.room_service import ensure_room_open
 
 
+def _call_hms_chat(question: str) -> dict:
+    try:
+        response = httpx.post(
+            f"{settings.HMS_URL.rstrip('/')}/chat",
+            json={"question": question, "history": [], "top_k": 8, "lang": "auto"},
+            timeout=120,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"HMS chat request failed: {exc}",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="HMS chat response was not valid JSON",
+        ) from exc
+
+    if not isinstance(data, dict) or not data.get("answer"):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="HMS chat response did not include answer",
+        )
+    return data
+
+
+def _persist_hms_sources(db: Session, ans_id: int, sources: list[dict]) -> list:
+    evidences = []
+    for source in sources:
+        law_name, article_no = parse_law_label(source.get("label"))
+        evidences.append(
+            evidence_repository.create(
+                db,
+                EvidenceCreate(
+                    ans_id=ans_id,
+                    law_name=law_name,
+                    article_no=article_no,
+                    core_basis=source.get("snippet"),
+                    source_url=source.get("source_url"),
+                ),
+            )
+        )
+    return evidences
+
+
+def persist_hms_verifications(
+    db: Session,
+    ans_id: int,
+    user_id: int,
+    citation_check: dict | None,
+) -> list:
+    verifications = []
+    output = citation_check.get("output", []) if isinstance(citation_check, dict) else []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        law_name, article_no = parse_law_label(item.get("matched_label") or item.get("raw"))
+        verifications.append(
+            verification_repository.create(
+                db,
+                VerificationCreate(
+                    ans_id=ans_id,
+                    user_id=user_id,
+                    law_name=law_name,
+                    article_no=article_no,
+                    article_exists=bool(item.get("exists")),
+                    content_matches=bool(item.get("clause_accurate")),
+                    effective_date_valid=bool(item.get("valid_as_of")),
+                    verification_status=map_verification_status(item),
+                    confidence_score=clamp_score(item.get("trust_score")),
+                    verification_reason=verification_reason(item),
+                ),
+            )
+        )
+    return verifications
+
+
 def create_ai_answer(db: Session, room_id: int, current_user: User, question: str) -> dict:
-    """Create user question, mock AI answer, evidence, and verification atomically."""
+    """Create user question, HMS AI answer, evidence, and verification atomically."""
     ensure_room_open(db, room_id, current_user)
     try:
         user_chat = chat_repository.create(
@@ -22,42 +106,24 @@ def create_ai_answer(db: Session, room_id: int, current_user: User, question: st
             ChatCreate(chatter_id=current_user.user_id, speaker_type="USER", chat_text=question),
         )
 
-        sources = retrieve_sources_stub(question)
-        answer_text = generate_mock_answer(question, sources)
+        hms_response = _call_hms_chat(question)
+        sources = hms_response.get("sources", [])
+        if not isinstance(sources, list):
+            sources = []
+        answer_text = hms_response["answer"]
         ai_chat = chat_repository.create(
             db,
             room_id,
             ChatCreate(chatter_id=None, speaker_type="AI", chat_text=answer_text),
         )
 
-        citations = extract_citations_stub(answer_text) or sources
-        evidences = [
-            evidence_repository.create(
-                db,
-                EvidenceCreate(
-                    ans_id=ai_chat.chat_id,
-                    law_name=item.get("law_name"),
-                    article_no=item.get("article_no"),
-                    core_basis=item.get("core_basis"),
-                    source_url=item.get("source_url"),
-                ),
-            )
-            for item in citations
-        ]
-
-        verifications = []
-        for citation in citations:
-            verification_result = verify_citation_stub(citation)
-            verifications.append(
-                verification_repository.create(
-                    db,
-                    VerificationCreate(
-                        ans_id=ai_chat.chat_id,
-                        user_id=current_user.user_id,
-                        **verification_result,
-                    ),
-                )
-            )
+        evidences = _persist_hms_sources(db, ai_chat.chat_id, sources)
+        verifications = persist_hms_verifications(
+            db,
+            ai_chat.chat_id,
+            current_user.user_id,
+            hms_response.get("citation_check"),
+        )
 
         db.commit()
         for item in [user_chat, ai_chat, *evidences, *verifications]:
@@ -67,6 +133,7 @@ def create_ai_answer(db: Session, room_id: int, current_user: User, question: st
             "answer_chat": ai_chat,
             "evidences": evidences,
             "verifications": verifications,
+            "hms": hms_response,
         }
     except Exception:
         db.rollback()

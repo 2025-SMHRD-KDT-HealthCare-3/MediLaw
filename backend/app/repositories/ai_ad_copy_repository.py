@@ -18,6 +18,18 @@ def create(
     return ai_copy
 
 
+def create_from_hms_review(
+    db: Session,
+    user_id: int,
+    payload: dict[str, str | None],
+) -> AiAdCopy:
+    ai_copy = AiAdCopy(**payload, user_id=user_id)
+    db.add(ai_copy)
+    db.flush()
+    db.refresh(ai_copy)
+    return ai_copy
+
+
 def get_by_id(db: Session, ai_copy_id: int) -> AiAdCopy | None:
     return db.get(AiAdCopy, ai_copy_id)
 
