@@ -12,6 +12,7 @@ const PORT = process.env.PORT ?? 4000
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173'
 const FASTAPI_TARGET = process.env.FASTAPI_TARGET ?? 'http://127.0.0.1:8000'
 const PRODUCT_API_TARGET = process.env.PRODUCT_API_TARGET ?? 'http://127.0.0.1:8001'
+const HMS_API_KEY = process.env.HMS_API_KEY ?? ''
 const PROD = process.env.NODE_ENV === 'production'
 
 const successPayload = (data: any = null, message = 'success') => ({
@@ -128,9 +129,23 @@ app.use(
     limit: 120,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.path.startsWith('/rag'),
+    skip: (req) => req.originalUrl.startsWith('/api/rag'),
   }),
 )
+
+app.use('/api/rag', (req, res, next) => {
+  if (['/chat', '/chat/stream', '/chat/checklist'].includes(req.path)) {
+    res.status(409).json(
+      errorPayload(
+        '챗봇 대화는 저장을 위해 제품 API를 사용해야 합니다.',
+        'RAG_DIRECT_CHAT_BLOCKED',
+        { expected_path: '/api/rooms/{room_id}/ai-answer' },
+      ),
+    )
+    return
+  }
+  next()
+})
 
 app.use(
   '/api/rag',
@@ -142,6 +157,9 @@ app.use(
     timeout: 0,
     logger: console,
     on: {
+      proxyReq: (proxyReq: any) => {
+        if (HMS_API_KEY) proxyReq.setHeader('x-api-key', HMS_API_KEY)
+      },
       error: proxyErrorHandler,
     },
   }),
