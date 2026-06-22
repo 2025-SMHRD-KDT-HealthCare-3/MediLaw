@@ -192,28 +192,18 @@ def test_review_segments_smoke():
     assert risky, "광고 과장 문구가 위험(low/med/high)으로 잡혀야"
 
 
-def test_endpoint_sse_event_order():
-    """7. 엔드포인트 SSE: 기획서 p2 → 이벤트 type 순서 routes → page → done."""
+def test_documents_review_pipeline():
+    """7. /documents/review 가 신 파이프라인으로 ReviewResponse 반환(텍스트 경로)."""
     if not _HAS_KEY:
-        return  # 엔드포인트 스모크도 LLM 가드(없으면 skip)
-    sample = _sample_pdf_bytes()
-    if sample is None:
         return
-    from app.routers.pdf_review import _stream_gen
-
-    raw = "".join(_stream_gen(sample, pages=[2]))
-    events = []
-    for blk in raw.split("\n\n"):
-        blk = blk.strip()
-        if not blk:
-            continue
-        assert blk.startswith("data: "), f"SSE 라인이 'data: '로 시작 안 함: {blk!r}"
-        import json
-        events.append(json.loads(blk[len("data: "):]))
-    assert events, "SSE 이벤트가 하나도 없음"
-    assert events[0]["type"] == "routes", f"첫 이벤트 type={events[0]['type']!r}"
-    assert events[-1]["type"] == "done", f"마지막 이벤트 type={events[-1]['type']!r}"
-    assert any(e["type"] == "page" for e in events), "page 이벤트가 최소 1개여야"
+    from app.pdf.review_adapter import review_to_response
+    r = review_to_response(text="부작용이 전혀 없는 100% 안전한 시술입니다. 국내 최초 무통증 치료.", top_k=4)
+    # ReviewResponse 계약
+    assert r.original_text and isinstance(r.segments, list)
+    assert r.revised_text != r.original_text  # before/after 치환됨
+    assert all(f.risk_level in ("high","medium","low") for f in r.findings)  # med→medium 매핑
+    assert hasattr(r.citation_check.summary, "avg_score")  # Citation Firewall 유지
+    assert r.extracted_by in ("text","ocr")
 
 
 def _make_scanned_pdf(sample: bytes):
@@ -301,7 +291,7 @@ _DETERMINISTIC = [
 ]
 _LLM = [
     ("review_segments (광고 위험판정)", test_review_segments_smoke),
-    ("endpoint SSE (routes→page→done)", test_endpoint_sse_event_order),
+    ("documents/review 신 파이프라인", test_documents_review_pipeline),
     ("OCR vision 백엔드 (스캔본→Block)", test_ocr_vision_backend_smoke),
 ]
 

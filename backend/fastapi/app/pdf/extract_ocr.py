@@ -224,11 +224,34 @@ def _map_vl_result(result, page_no: int) -> "list[tuple[str, str, float | None, 
     return out
 
 
+# 로컬 PaddleOCR-VL 추론에 필요한 최소 가용 메모리(GB). 모델 ~1.9GB + 프레임워크라
+# 6GB 미만이면 로딩 중 OOM(SIGKILL, try/except로 못 막음) 위험 → 아예 시도하지 않는다.
+_MIN_OCR_RAM_BYTES = int(os.environ.get("PADDLE_OCR_VL_MIN_RAM_GB", "6")) * (1024 ** 3)
+
+
+def _has_enough_memory() -> bool:
+    """가용 메모리가 로컬 OCR 임계 이상인지. 측정 불가 시 True(정상환경 막지 않음)."""
+    try:
+        import psutil
+
+        return psutil.virtual_memory().available >= _MIN_OCR_RAM_BYTES
+    except Exception:  # noqa: BLE001
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        return int(line.split()[1]) * 1024 >= _MIN_OCR_RAM_BYTES
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
+
 def _get_paddle_vl():
     """PaddleOCRVL 인스턴스를 지연 생성하고 프로세스 1회 캐시.
 
     가중치 다운로드/패키지 미설치 실패(URLError 등)는 graceful — None 을 캐시하고
     이후 호출은 즉시 빈 결과로 빠진다(반복 재시도/지연 방지). 예외 전파하지 않는다.
+    저메모리 환경에선 모델 로딩 자체가 OOM-킬 위험이라, 로딩 전 메모리를 점검해 막는다.
     """
     global _PADDLE_VL
     if _PADDLE_VL != "__uninitialized__":
@@ -245,9 +268,16 @@ def _get_paddle_vl():
         kwargs = {}
         server_url = os.environ.get("PADDLE_OCR_VL_SERVER_URL")
         if server_url:
-            # 자체 호스팅 VL 추론 서버(vLLM 등) 사용 시.
+            # 자체 호스팅 VL 추론 서버(vLLM 등) 사용 시 — 로컬 가중치 로딩 없음.
             kwargs["vl_rec_backend"] = os.environ.get("PADDLE_OCR_VL_BACKEND", "vllm-server")
             kwargs["vl_rec_server_url"] = server_url
+        elif not _has_enough_memory():
+            # 로컬 로딩인데 메모리 부족 → OOM-킬 방지 위해 시도조차 안 함.
+            print(f"[extract_ocr] 가용 메모리가 {_MIN_OCR_RAM_BYTES // (1024**3)}GB 미만 → "
+                  f"PaddleOCR-VL 로컬 로딩 생략(graceful 빈 결과). "
+                  f"OCR_BACKEND=vision 또는 더 큰 메모리/PADDLE_OCR_VL_SERVER_URL 사용.")
+            _PADDLE_VL = None
+            return None
         _PADDLE_VL = PaddleOCRVL(**kwargs)
     except Exception as e:  # noqa: BLE001 — URLError(가중치 호스트 차단) 등 포함
         print(f"[extract_ocr] PaddleOCRVL 초기화 실패(가중치 차단/미설치 추정) "
