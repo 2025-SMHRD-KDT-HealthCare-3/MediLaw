@@ -44,7 +44,8 @@
 | 분류 | 메서드 · 경로 | 용도 |
 |---|---|---|
 | 🟢 **프론트용** | `POST /chat/stream` | AI 질의응답 챗봇(SSE 스트리밍) |
-| 🟢 **프론트용** | `POST /documents/review` | PDF/텍스트 위험 검토 + before/after 수정안 |
+| 🟢 **프론트용** | `POST /documents/review` | PDF/텍스트 위험 검토 + before/after(전체 한 번에) |
+| 🟢 **프론트용** | `POST /documents/review/stream` | 위와 동일, **페이지별 SSE 점진 노출**(앞 페이지부터) |
 | 🟢 **프론트용** | `POST /chat/checklist` | '체크리스트 생성' 버튼 — 대화+PDF검토 종합 → 통합 체크리스트 |
 | 챗봇(단발) | `POST /chat` | 위와 동일, JSON 한 번에 반환(느림) |
 | 코어 | `POST /v1/retrieve` | 하이브리드 RAG 검색 |
@@ -138,9 +139,19 @@ curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
 
 ### 2. `POST /documents/review` — 능동형 PDF 에디터 🟢
 
-문서(PDF/텍스트) → 텍스트 추출(**스캔본은 비전 OCR fallback**) → **세그먼트별 RAG(코어 검색)로 코드가 근거 확보** → **gpt-5.5는 위반여부·사유·대안·risk_level만** → Citation Firewall.
-결과로 **before/after**(원문 ↔ 수정본)와 위험 세그먼트별 사유·대안·근거를 돌려줍니다.
-> **LLM에 전부 위임하지 않음**: 어느 근거가 어느 finding에 붙는지는 LLM이 번호로 고르지 않고 **코드의 세그먼트별 검색 결과가 결정**한다(인용 오연결·환각 방지). LLM은 자연어 판단·문구만, 인덱스·인용 연결 등 수치/구조는 코드가 산출.
+문서(PDF/텍스트) → **신 PDF 파이프라인**(페이지 라우팅 → pdfplumber 텍스트·**표** ∥ 스캔본 **OCR** → doc_type 자동분류 → 세그먼트 → 위험판정 → 블록단위 before/after) → Citation Firewall.
+결과로 **before/after**(원문 ↔ 수정본)와 위험 세그먼트별 사유·대안·근거를 돌려줍니다(응답: `ReviewResponse`).
+> **LLM에 전부 위임하지 않음**: 근거 확보·인덱스·인용 연결 등 수치/구조는 **코드(코어 검색)**가, LLM은 위반여부·사유·대안 문구·risk_level만. OCR 기본 백엔드는 PaddleOCR-VL(자체호스팅), 메모리 부족 시 graceful. (체크리스트는 분리됨 → [`/chat/checklist`](#2-b-post-chatchecklist--통합-체크리스트대화--pdf-)).
+
+**🟢 페이지별 스트리밍** `POST /documents/review/stream` (SSE) — 큰 PDF에서 **앞 페이지부터 즉시** 보여주고 뒤는 처리되는 대로 채우는 UX용:
+```
+data: {"type":"pages","page_count":5,"routes":[{"page":1,"route":"digital"}, ...]}
+data: {"type":"page","page":1,"progress":"1/5","doc_type":"ad",
+       "original_text":"...","revised_text":"...","findings":[{"segment_index":0,
+       "segment_text":"...","risk_level":"high","issue":"...","suggestion":"...","law":["..."]}]}
+data: {"type":"done","summary":{"page_count":5,"risky":3,"changes":2}}
+```
+> 프론트: `page` 이벤트를 받는 즉시 그 페이지 카드를 before/after로 렌더(순서대로). 파싱은 `/chat/stream`과 동일(`fetch`+`ReadableStream`, `data:` 라인 JSON). `pages=2,3` 폼 필드로 특정 페이지만도 가능.
 
 **요청** `Content-Type: multipart/form-data` — `file`(PDF) **또는** `text` 중 하나 필수
 
