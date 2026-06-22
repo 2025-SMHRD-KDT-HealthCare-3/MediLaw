@@ -216,6 +216,42 @@ def test_endpoint_sse_event_order():
     assert any(e["type"] == "page" for e in events), "page 이벤트가 최소 1개여야"
 
 
+def test_ocr_vision_path_smoke():
+    """8. OCR 경로: 이미지전용(스캔본) PDF → 라우팅 scan → 비전 OCR(gpt-5.5) → Block[].
+
+    PaddleOCR-VL은 가중치 차단 환경에서 미동작하므로, 기본 백엔드(vision)로 OCR 분기를
+    실측한다(거주 정책은 추후 — 챗봇과 동일하게 외부 LLM 사용).
+    """
+    if not _HAS_KEY:
+        return  # OCR(vision)는 LLM 필요
+    sample = _sample_pdf_bytes()
+    if sample is None:
+        return
+    try:
+        import io
+
+        import pypdfium2 as pdfium
+    except ImportError:
+        return
+    # 기획서 p1을 렌더해 텍스트 레이어 없는 이미지전용 PDF(스캔본) 생성
+    img = pdfium.PdfDocument(sample)[0].render(scale=2.0).to_pil().convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, "PDF")
+    scanned = buf.getvalue()
+
+    from app.pdf.routing import route_pages
+
+    routes = route_pages(scanned)
+    assert routes and routes[0].route == "scan", "이미지전용 PDF는 scan으로 라우팅돼야"
+
+    from app.pdf.pipeline import process_pdf
+
+    r = process_pdf(scanned, doc_id="scanned", top_k=4)
+    ocr_blocks = [b for b in r["document"].blocks if b.source == "ocr"]
+    assert ocr_blocks, "비전 OCR이 블록을 추출해야"
+    assert any(b.text.strip() for b in ocr_blocks), "추출 텍스트가 비어있지 않아야"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 단독 러너 — python tests/test_pdf_pipeline.py
 # ─────────────────────────────────────────────────────────────────────────────
@@ -229,6 +265,7 @@ _DETERMINISTIC = [
 _LLM = [
     ("review_segments (광고 위험판정)", test_review_segments_smoke),
     ("endpoint SSE (routes→page→done)", test_endpoint_sse_event_order),
+    ("OCR 비전 경로 (스캔본→Block)", test_ocr_vision_path_smoke),
 ]
 
 
