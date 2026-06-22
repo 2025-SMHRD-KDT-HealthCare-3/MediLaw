@@ -11,17 +11,25 @@
 OCR 백엔드는 OCR_BACKEND 환경변수로 교체한다.
 
   "paddleocr_vl"  (프로덕션, 권장):
-      국내 자체 호스팅 PaddleOCR-VL. 데이터가 외부로 나가지 않음(거주 정책 준수).
-      이 개발 환경엔 모델/패키지가 없으므로 **인터페이스 스텁만** 둔다.
-      실제 모델 로딩/설치 금지. 미설치 시 graceful 빈 결과.
+      국내 자체 호스팅 PaddleOCR-VL(paddleocr 3.x `PaddleOCRVL`). 데이터가 외부로
+      나가지 않음(거주 정책 준수). 첫 호출 시 인스턴스를 지연 생성(프로세스 1회 캐시)하고
+      렌더 페이지 이미지를 ocr.predict()로 추론한 뒤 결과를 Block[]으로 매핑한다.
+
+      ⚠️ **이 개발 환경은 모델 가중치 호스트 접근이 차단**되어 있어(URLError: Connection
+      refused) 가중치 다운로드가 실패한다 → 인스턴스화/추론이 예외를 내며, 이때는 로그만
+      남기고 **빈 결과로 graceful degrade**한다(예외 전파 금지). 가중치를 받을 수 있는
+      프로덕션(국내 서버)에서 실제로 동작한다.
 
   "vision"        (개발 폴백, 기본값):
       기존 app.llm.ocr_image(b64_png)(OpenAI 비전) 재사용.
       ⚠️ 외부(OpenAI) 호출이므로 **데이터 거주 정책 위반 — 개발용 폴백 전용**이다.
       프로덕션에서는 반드시 OCR_BACKEND="paddleocr_vl" 로 전환할 것.
 
-기본값이 "vision"인 이유: 이 환경에 paddleocr_vl 모델이 없어 개발 검증이
+기본값이 "vision"인 이유: 이 환경에 paddleocr_vl 모델 가중치가 없어 개발 검증이
 가능한 폴백을 기본으로 둔다. 운영 배포 시 환경변수로 강제 전환한다.
+
+import 시 paddle/모델 로딩이나 네트워크 시도가 일어나지 않도록, paddleocr import 및
+PaddleOCRVL 인스턴스화는 모두 `paddleocr_vl` 백엔드 첫 호출 시점으로 **지연**한다.
 
 모든 처리는 graceful: 렌더/백엔드 실패 시 빈 리스트(또는 처리된 부분까지).
 """
@@ -90,43 +98,212 @@ def _render_pages(pdf_bytes: bytes, pages: "list[int] | None") -> "list[tuple[in
     return out
 
 
-# ── 백엔드: PaddleOCR-VL (프로덕션 스텁) ──────────────────────────────────────
-def _ocr_paddleocr_vl(b64_png: str) -> "list[tuple[str, float | None, list[float] | None]]":
-    """프로덕션 백엔드: 국내 자체 호스팅 PaddleOCR-VL.
+# ── 백엔드: PaddleOCR-VL (프로덕션) ───────────────────────────────────────────
+# 텍스트로 취급할 레이아웃 라벨(문단류). 그 외(image/chart/seal 등)는 텍스트 추출 대상 아님.
+_VL_PARA_LABELS = {
+    "text", "paragraph", "paragraph_title", "title", "doc_title", "abstract",
+    "content", "header", "footer", "footnote", "reference", "list", "formula",
+    "header_image",  # 캡션 텍스트가 들어오는 경우 대비
+}
+# 표 영역으로 매핑할 라벨.
+_VL_TABLE_LABELS = {"table"}
+# 텍스트가 없어 스킵할 비텍스트 라벨.
+_VL_SKIP_LABELS = {"image", "figure", "chart", "seal", "stamp"}
 
-    반환: (text, confidence, bbox[x0,y0,x1,y1]) 튜플 리스트(줄/영역 단위).
-    bbox 는 가능하면 채운다(before/after 치환용). confidence 는 0~1.
+# 프로세스 1회 캐시(지연 생성). _SENTINEL=초기화 안 함, None=초기화 실패(가중치 차단 등).
+_PADDLE_VL = "__uninitialized__"
 
-    ── 인터페이스 스텁 ──
-    실제 호출은 자체 호스팅 추론 서버(예: PaddleOCR-VL vLLM 엔드포인트)로 보낸다.
-    이 개발 환경엔 모델/패키지가 없으므로 **여기서 모델을 로딩하지 않는다.**
-    배포 시 아래 자리에서 추론 서버를 호출하고, 결과를 (text, conf, bbox)로 매핑한다.
 
-    예시(미구현 — 의사코드):
-        client = PaddleVLClient(endpoint=os.environ["PADDLE_OCR_VL_URL"])
-        result = client.recognize(png_bytes=base64.b64decode(b64_png))
-        return [(r.text, r.score, r.bbox) for r in result.lines]
+def _bbox_from_polygon(poly) -> "list[float] | None":
+    """폴리곤 점들(또는 [x0,y0,x1,y1])에서 [x0,y0,x1,y1] 사각 bbox 추출(방어적)."""
+    if poly is None:
+        return None
+    try:
+        pts = list(poly)
+    except TypeError:
+        return None
+    if not pts:
+        return None
+    # 이미 [x0,y0,x1,y1] 형태(4개 스칼라)면 그대로 정규화.
+    if len(pts) == 4 and all(isinstance(v, (int, float)) for v in pts):
+        x0, y0, x1, y1 = (float(v) for v in pts)
+        return [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
+    xs, ys = [], []
+    for pt in pts:
+        try:
+            x, y = pt[0], pt[1]
+        except (TypeError, IndexError, KeyError):
+            continue
+        xs.append(float(x))
+        ys.append(float(y))
+    if not xs or not ys:
+        return None
+    return [min(xs), min(ys), max(xs), max(ys)]
 
-    미설치/미구성 환경에선 빈 리스트로 graceful degrade.
+
+def _result_to_dict(result) -> "dict | None":
+    """PaddleOCRVL predict 결과(객체/딕셔너리)를 평탄한 dict로 정규화(방어적).
+
+    버전별로 result.json["res"] / result.json / dict-like 접근이 다를 수 있어 순서대로 시도.
     """
-    endpoint = os.environ.get("PADDLE_OCR_VL_URL")
-    if not endpoint:
-        # 추론 서버 미구성 — graceful 빈 결과(개발 환경 기본 동작)
+    # 1) MarkdownMixin/JsonMixin: .json -> {"res": {...}}
+    try:
+        j = getattr(result, "json", None)
+        if isinstance(j, dict):
+            res = j.get("res", j)
+            if isinstance(res, dict):
+                return res
+    except Exception:
+        pass
+    # 2) 이미 dict 인 경우
+    if isinstance(result, dict):
+        return result.get("res", result) if isinstance(result.get("res"), dict) else result
+    return None
+
+
+def _map_vl_result(result, page_no: int) -> "list[tuple[str, str, float | None, list[float] | None]]":
+    """PaddleOCRVL 한 페이지 결과 → (block_type, text, confidence, bbox) 튜플 리스트.
+
+    우선순위:
+      1) parsing_res_list(레이아웃 인지) — 라벨로 para/table 구분, content=텍스트, bbox 포함.
+      2) parsing_res_list 가 비면 spotting_res / overall_ocr_res 의 라인 단위
+         (rec_texts/rec_scores/rec_polys) → 모두 para.
+    confidence: 라인 단위 spotting 결과는 rec_scores, 레이아웃 블록은 점수 없음(None).
+    스키마가 버전마다 달라 getattr/키존재 확인으로 안전하게 처리한다.
+    """
+    out: "list[tuple[str, str, float | None, list[float] | None]]" = []
+    data = _result_to_dict(result)
+    if not isinstance(data, dict):
+        return out
+
+    parsing = data.get("parsing_res_list") or []
+    if isinstance(parsing, (list, tuple)):
+        for blk in parsing:
+            # 객체(PaddleOCRVLBlock) 또는 dict 모두 지원
+            label = (getattr(blk, "label", None)
+                     or (blk.get("block_label") if isinstance(blk, dict) else None)
+                     or "")
+            content = (getattr(blk, "content", None)
+                       or (blk.get("block_content") if isinstance(blk, dict) else None)
+                       or "")
+            bbox_raw = (getattr(blk, "bbox", None)
+                        if not isinstance(blk, dict) else blk.get("block_bbox"))
+            poly = (getattr(blk, "polygon_points", None)
+                    if not isinstance(blk, dict) else blk.get("block_polygon_points"))
+            text = (content or "").strip() if isinstance(content, str) else str(content)
+            if not text:
+                continue
+            label_l = str(label).lower()
+            if label_l in _VL_SKIP_LABELS:
+                continue
+            bbox = _bbox_from_polygon(poly) or _bbox_from_polygon(bbox_raw)
+            btype = "table" if label_l in _VL_TABLE_LABELS else "para"
+            out.append((btype, text, None, bbox))
+        if out:
+            return out
+
+    # 폴백: 라인 단위 OCR(점수 포함). 키 이름이 버전별로 다를 수 있어 둘 다 본다.
+    spotting = data.get("spotting_res") or data.get("overall_ocr_res") or {}
+    if isinstance(spotting, dict):
+        texts = spotting.get("rec_texts") or []
+        scores = spotting.get("rec_scores") or []
+        polys = spotting.get("rec_polys") or spotting.get("dt_polys") or []
+        for i, t in enumerate(texts):
+            text = (t or "").strip() if isinstance(t, str) else str(t)
+            if not text:
+                continue
+            score = None
+            if i < len(scores):
+                try:
+                    score = float(scores[i])
+                except (TypeError, ValueError):
+                    score = None
+            bbox = _bbox_from_polygon(polys[i]) if i < len(polys) else None
+            out.append(("para", text, score, bbox))
+    return out
+
+
+def _get_paddle_vl():
+    """PaddleOCRVL 인스턴스를 지연 생성하고 프로세스 1회 캐시.
+
+    가중치 다운로드/패키지 미설치 실패(URLError 등)는 graceful — None 을 캐시하고
+    이후 호출은 즉시 빈 결과로 빠진다(반복 재시도/지연 방지). 예외 전파하지 않는다.
+    """
+    global _PADDLE_VL
+    if _PADDLE_VL != "__uninitialized__":
+        return _PADDLE_VL
+    try:
+        # 지연 import — 모듈 import 시 paddle 로딩/네트워크 시도 방지.
+        from paddleocr import PaddleOCRVL
+    except Exception as e:  # noqa: BLE001
+        print(f"[extract_ocr] paddleocr import 불가 → vision 폴백 권장: {e}")
+        _PADDLE_VL = None
+        return None
+    try:
+        # 인스턴스화 시 모델 가중치 해석/다운로드가 일어난다. 차단 환경에선 여기서 실패.
+        kwargs = {}
+        server_url = os.environ.get("PADDLE_OCR_VL_SERVER_URL")
+        if server_url:
+            # 자체 호스팅 VL 추론 서버(vLLM 등) 사용 시.
+            kwargs["vl_rec_backend"] = os.environ.get("PADDLE_OCR_VL_BACKEND", "vllm-server")
+            kwargs["vl_rec_server_url"] = server_url
+        _PADDLE_VL = PaddleOCRVL(**kwargs)
+    except Exception as e:  # noqa: BLE001 — URLError(가중치 호스트 차단) 등 포함
+        print(f"[extract_ocr] PaddleOCRVL 초기화 실패(가중치 차단/미설치 추정) "
+              f"→ graceful 빈 결과: {type(e).__name__}: {e}")
+        _PADDLE_VL = None
+    return _PADDLE_VL
+
+
+def _ocr_paddleocr_vl(b64_png: str) -> "list[tuple[str, str, float | None, list[float] | None]]":
+    """프로덕션 백엔드: 국내 자체 호스팅 PaddleOCR-VL(paddleocr `PaddleOCRVL`).
+
+    반환: (block_type, text, confidence, bbox[x0,y0,x1,y1]) 튜플 리스트.
+      - block_type: "para" 또는 "table"(표 영역 식별 시).
+      - bbox 는 가능하면 채운다(before/after 치환용). confidence 는 0~1(없으면 None).
+
+    동작:
+      1) 인스턴스 지연 생성(_get_paddle_vl, 1회 캐시). 가중치 차단 시 None → 빈 결과.
+      2) b64 PNG → ndarray(BGR) 로 디코드해 ocr.predict() 추론.
+      3) 결과(parsing_res_list / spotting_res)를 _map_vl_result 로 매핑.
+    모든 실패(URLError/추론 오류 등)는 graceful — 빈 리스트(예외 전파 금지).
+    """
+    ocr = _get_paddle_vl()
+    if ocr is None:
         return []
-    # 실제 호출 자리(미구현). 모델 로딩 금지 — 원격 추론 서버 호출만 허용.
-    raise NotImplementedError(
-        "paddleocr_vl 백엔드는 자체 호스팅 추론 서버 연동이 필요합니다 "
-        "(PADDLE_OCR_VL_URL 구성 후 _ocr_paddleocr_vl 구현)."
-    )
+    try:
+        import numpy as np
+        from PIL import Image
+        img = Image.open(io.BytesIO(base64.b64decode(b64_png))).convert("RGB")
+        arr = np.array(img)[:, :, ::-1]  # RGB → BGR(paddle 관례)
+    except Exception as e:  # noqa: BLE001
+        print(f"[extract_ocr] paddleocr_vl 이미지 디코드 실패 → skip: {e}")
+        return []
+    try:
+        results = ocr.predict(arr)
+    except Exception as e:  # noqa: BLE001
+        print(f"[extract_ocr] paddleocr_vl predict 실패 → graceful 빈 결과: "
+              f"{type(e).__name__}: {e}")
+        return []
+    # predict 는 페이지(이미지)당 결과 리스트(또는 제너레이터)를 돌려준다.
+    out: "list[tuple[str, str, float | None, list[float] | None]]" = []
+    try:
+        for res in results:
+            out.extend(_map_vl_result(res, page_no=0))
+    except Exception as e:  # noqa: BLE001
+        print(f"[extract_ocr] paddleocr_vl 결과 매핑 중 오류(부분 결과 유지): {e}")
+    return out
 
 
 # ── 백엔드: vision (개발 폴백, OpenAI) ────────────────────────────────────────
-def _ocr_vision(b64_png: str) -> "list[tuple[str, float | None, list[float] | None]]":
+def _ocr_vision(b64_png: str) -> "list[tuple[str, str, float | None, list[float] | None]]":
     """개발 폴백 백엔드: app.llm.ocr_image(OpenAI 비전).
 
     ⚠️ 외부 호출 — 데이터 거주 정책 위반. 개발/검증 전용.
-    plain text(줄바꿈 보존)를 받아 줄 단위 (text, None, None) 으로 래핑.
+    plain text(줄바꿈 보존)를 받아 줄 단위 ("para", text, None, None) 으로 래핑.
     confidence/bbox 미지원(None). LLM 사용불가/실패 시 빈 리스트(graceful).
+
+    반환 튜플 형식은 paddleocr_vl 백엔드와 동일: (block_type, text, conf, bbox).
     """
     try:
         from app import llm
@@ -138,7 +315,7 @@ def _ocr_vision(b64_png: str) -> "list[tuple[str, float | None, list[float] | No
         # LLMUnavailable(키 없음) 포함 모든 실패 → graceful 빈 결과
         return []
     # 줄 단위로 분해(빈 줄 제거). bbox/confidence 없음.
-    return [(line.strip(), None, None) for line in text.splitlines() if line.strip()]
+    return [("para", line.strip(), None, None) for line in text.splitlines() if line.strip()]
 
 
 _BACKENDS = {
@@ -169,18 +346,17 @@ def extract_ocr(pdf_bytes: bytes, pages: "list[int] | None" = None) -> "list[Blo
     for page_no, b64 in rendered:
         try:
             lines = backend(b64)
-        except NotImplementedError:
-            # 프로덕션 백엔드 미구현 환경 → 해당 페이지 graceful skip
-            continue
         except Exception:
+            # 백엔드 자체 예외(가중치 차단 등) → 해당 페이지 graceful skip
             continue
-        for text, conf, bbox in lines:
+        for item in lines:
+            btype, text, conf, bbox = _normalize_line(item)
             if not text:
                 continue
             counter += 1
             blocks.append(Block(
                 id=f"ocr-p{page_no}-{counter}",
-                type="para",
+                type=btype,
                 text=text,
                 page=page_no,
                 bbox=bbox,
@@ -188,6 +364,28 @@ def extract_ocr(pdf_bytes: bytes, pages: "list[int] | None" = None) -> "list[Blo
                 confidence=conf,
             ))
     return blocks
+
+
+# 매핑 시 사용할 허용 BlockType(스키마 계약). 그 외는 para 로 graceful.
+_ALLOWED_BLOCK_TYPES = {"heading", "para", "list_item", "table", "table_row", "figure"}
+
+
+def _normalize_line(item) -> "tuple[str, str, float | None, list[float] | None]":
+    """백엔드 반환 튜플을 (block_type, text, conf, bbox) 로 정규화(방어적).
+
+    구버전 3-튜플(text, conf, bbox)도 허용 → type 은 para. type 이 계약 밖이면 para.
+    """
+    if not isinstance(item, (tuple, list)):
+        return ("para", "", None, None)
+    if len(item) == 4:
+        btype, text, conf, bbox = item
+    elif len(item) == 3:  # 하위호환: (text, conf, bbox)
+        btype, (text, conf, bbox) = "para", item
+    else:
+        return ("para", "", None, None)
+    btype = btype if btype in _ALLOWED_BLOCK_TYPES else "para"
+    text = "" if text is None else str(text)
+    return (btype, text, conf, bbox)
 
 
 def is_low_confidence(block: "Block") -> bool:
@@ -219,14 +417,16 @@ def test_low_confidence_flag():
     assert is_low_confidence(none) is False
 
 
-def test_paddleocr_vl_graceful_without_endpoint():
-    # 추론 서버 미구성 시 빈 결과(graceful, NotImplementedError 아님)
-    prev = os.environ.pop("PADDLE_OCR_VL_URL", None)
+def test_paddleocr_vl_graceful_when_weights_blocked():
+    # 가중치 차단/미설치로 인스턴스화 실패 시 빈 결과(graceful, 예외 전파 금지).
+    import app.pdf.extract_ocr as mod
+
+    prev = mod._PADDLE_VL
+    mod._PADDLE_VL = None  # 초기화 실패(가중치 차단) 상태를 흉내
     try:
-        assert _ocr_paddleocr_vl("x") == []
+        assert mod._ocr_paddleocr_vl("ignored") == []
     finally:
-        if prev is not None:
-            os.environ["PADDLE_OCR_VL_URL"] = prev
+        mod._PADDLE_VL = prev
 
 
 def test_block_format_matches_contract():
@@ -234,7 +434,8 @@ def test_block_format_matches_contract():
     import app.pdf.extract_ocr as mod
 
     orig = mod._BACKENDS["vision"]
-    mod._BACKENDS["vision"] = lambda b64: [("샘플 줄1", None, None), ("샘플 줄2", None, None)]
+    mod._BACKENDS["vision"] = lambda b64: [
+        ("para", "샘플 줄1", None, None), ("para", "샘플 줄2", None, None)]
     try:
         # _render_pages 도 우회: 가짜 렌더 결과 주입
         orig_render = mod._render_pages
@@ -251,6 +452,105 @@ def test_block_format_matches_contract():
     assert all(b.source == "ocr" for b in blocks)
     assert all(b.type == "para" and b.page == 1 for b in blocks)
     assert [b.id for b in blocks] == ["ocr-p1-1", "ocr-p1-2"]
+
+
+# ── 매핑 단위 테스트 (목 결과 — 실제 가중치 추론은 이 환경서 불가) ──────────────
+class _MockVLBlock:
+    """PaddleOCRVLBlock 흉내(.label/.content/.bbox/.polygon_points)."""
+    def __init__(self, label, content, bbox=None, polygon_points=None):
+        self.label = label
+        self.content = content
+        self.bbox = bbox
+        self.polygon_points = polygon_points
+
+
+class _MockVLResult:
+    """PaddleOCRVL predict 결과 흉내 — .json -> {"res": {...}}."""
+    def __init__(self, payload):
+        self._payload = payload
+
+    @property
+    def json(self):
+        return {"res": self._payload}
+
+
+def test_map_vl_result_parsing_list_objects():
+    # parsing_res_list(객체) → para/table 구분 + 폴리곤 bbox 추출.
+    res = _MockVLResult({
+        "parsing_res_list": [
+            _MockVLBlock("text", "본문 한 줄", polygon_points=[[10, 20], [110, 20], [110, 60], [10, 60]]),
+            _MockVLBlock("table", "<table>...</table>", bbox=[0, 100, 200, 300]),
+            _MockVLBlock("image", "", bbox=[0, 0, 50, 50]),  # 비텍스트 → skip
+            _MockVLBlock("paragraph_title", "제목", bbox=[5, 5, 80, 25]),
+        ]
+    })
+    mapped = _map_vl_result(res, page_no=1)
+    types = [m[0] for m in mapped]
+    texts = [m[1] for m in mapped]
+    assert types == ["para", "table", "para"]  # image 는 빠짐
+    assert "본문 한 줄" in texts and "<table>...</table>" in texts and "제목" in texts
+    # 폴리곤 → [x0,y0,x1,y1]
+    assert mapped[0][3] == [10.0, 20.0, 110.0, 60.0]
+    assert mapped[1][3] == [0.0, 100.0, 200.0, 300.0]
+    assert all(m[2] is None for m in mapped)  # 레이아웃 블록은 점수 없음
+
+
+def test_map_vl_result_parsing_list_dicts():
+    # parsing_res_list(dict 형태) 도 동일하게 처리.
+    res = _MockVLResult({
+        "parsing_res_list": [
+            {"block_label": "text", "block_content": "딕트 본문", "block_bbox": [1, 2, 3, 4]},
+        ]
+    })
+    mapped = _map_vl_result(res, page_no=1)
+    assert mapped == [("para", "딕트 본문", None, [1.0, 2.0, 3.0, 4.0])]
+
+
+def test_map_vl_result_spotting_fallback_with_scores():
+    # parsing_res_list 비면 라인 단위(spotting_res) — rec_texts/scores/polys.
+    res = _MockVLResult({
+        "parsing_res_list": [],
+        "spotting_res": {
+            "rec_texts": ["라인1", "  ", "라인2"],   # 빈 줄은 스킵
+            "rec_scores": [0.95, 0.1, 0.42],
+            "rec_polys": [
+                [[0, 0], [10, 0], [10, 10], [0, 10]],
+                [[0, 0], [1, 0], [1, 1], [0, 1]],
+                [[5, 5], [25, 5], [25, 15], [5, 15]],
+            ],
+        },
+    })
+    mapped = _map_vl_result(res, page_no=2)
+    assert [m[1] for m in mapped] == ["라인1", "라인2"]
+    assert mapped[0][2] == 0.95 and mapped[1][2] == 0.42
+    assert mapped[0][3] == [0.0, 0.0, 10.0, 10.0]
+
+
+def test_map_vl_result_overall_ocr_res_key():
+    # 일부 버전은 overall_ocr_res 키 사용 → 동일 처리.
+    res = _MockVLResult({
+        "overall_ocr_res": {"rec_texts": ["대체키"], "rec_scores": [0.7]},
+    })
+    mapped = _map_vl_result(res, page_no=1)
+    assert mapped == [("para", "대체키", 0.7, None)]
+
+
+def test_map_vl_result_garbage_is_graceful():
+    # 알 수 없는/빈 구조 → 예외 없이 빈 리스트.
+    assert _map_vl_result(_MockVLResult({}), 1) == []
+    assert _map_vl_result(object(), 1) == []
+    assert _map_vl_result(None, 1) == []
+
+
+def test_normalize_line_backward_compat():
+    # 3-튜플(text, conf, bbox) 하위호환 → para.
+    assert _normalize_line(("hi", 0.5, None)) == ("para", "hi", 0.5, None)
+    # 4-튜플 + 계약 밖 타입 → para 로 강등.
+    assert _normalize_line(("weird", "t", None, None)) == ("para", "t", None, None)
+    # table 은 유지.
+    assert _normalize_line(("table", "t", None, [0, 0, 1, 1])) == ("table", "t", None, [0, 0, 1, 1])
+    # 형식 불량 → 빈 텍스트(스킵 대상).
+    assert _normalize_line("nope") == ("para", "", None, None)
 
 
 # ── 단독 러너 ────────────────────────────────────────────────────────────────
