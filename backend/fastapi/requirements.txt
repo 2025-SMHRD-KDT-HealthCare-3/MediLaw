@@ -20,3 +20,4 @@ sqlite-vec==0.1.6
 # 기능 4 — MCP Server (FastAPI에 /mcp SSE로 마운트)
 mcp==1.27.2
 sse-starlette==3.4.4
+pdfplumber==0.11.10
