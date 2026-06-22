@@ -151,7 +151,46 @@ data: {"type":"page","page":1,"progress":"1/5","doc_type":"ad",
        "segment_text":"...","risk_level":"high","issue":"...","suggestion":"...","law":["..."]}]}
 data: {"type":"done","summary":{"page_count":5,"risky":3,"changes":2}}
 ```
-> 프론트: `page` 이벤트를 받는 즉시 그 페이지 카드를 before/after로 렌더(순서대로). 파싱은 `/chat/stream`과 동일(`fetch`+`ReadableStream`, `data:` 라인 JSON). `pages=2,3` 폼 필드로 특정 페이지만도 가능.
+> 프론트: `page` 이벤트를 받는 즉시 그 페이지 카드를 before/after로 렌더(순서대로). `pages=2,3` 폼 필드로 특정 페이지만도 가능.
+
+**프론트 SSE 예제(JS)** — `multipart`로 PDF 업로드 + 페이지별 점진 수신:
+```js
+async function reviewStream(file, { onPages, onPage, onDone, onError } = {}) {
+  const fd = new FormData();
+  fd.append("file", file);              // <input type="file">의 File 객체
+  // fd.append("pages", "1,2");         // (선택) 특정 페이지만
+  const res = await fetch("http://localhost:8077/documents/review/stream", {
+    method: "POST", body: fd /*, headers: { "x-api-key": KEY } */,
+  });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const events = buf.split("\n\n");     // SSE 이벤트 경계
+    buf = events.pop();                   // 미완성 조각은 다음 청크로
+    for (const ev of events) {
+      const line = ev.split("\n").find((l) => l.startsWith("data:"));
+      if (!line) continue;
+      const msg = JSON.parse(line.slice(5).trim());
+      if (msg.type === "pages") onPages?.(msg);        // 페이지 수만큼 스켈레톤 카드
+      else if (msg.type === "page") onPage?.(msg);     // 그 페이지 카드 즉시 채움(before/after·findings)
+      else if (msg.type === "done") onDone?.(msg.summary);
+      else if (msg.type === "error") onError?.(msg);   // 한 페이지 실패(스트림은 계속)
+    }
+  }
+}
+
+// 사용 예
+reviewStream(fileInput.files[0], {
+  onPages: (m) => renderSkeletons(m.page_count),
+  onPage:  (p) => fillCard(p.page, p.original_text, p.revised_text, p.findings),
+  onDone:  (s) => showSummary(s),         // {page_count, risky, changes}
+});
+```
+> ⚠️ 브라우저 `EventSource`는 GET·헤더 미지원 → 위처럼 `fetch`+`ReadableStream`으로 파싱(`/chat/stream`과 동일 패턴). React→Node→FastAPI 구조면 Node가 이 SSE를 받아 브라우저로 중계(passthrough).
 
 **요청** `Content-Type: multipart/form-data` — `file`(PDF) **또는** `text` 중 하나 필수
 
