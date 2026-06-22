@@ -46,8 +46,9 @@ sys.path.insert(
 from app.pdf.schema import Block  # noqa: E402
 
 # ── 설정 ─────────────────────────────────────────────────────────────────────
-# 백엔드 선택: 환경변수 없으면 개발 폴백("vision"). 프로덕션은 "paddleocr_vl".
-OCR_BACKEND = os.environ.get("OCR_BACKEND", "vision")
+# 백엔드 선택: 기본 "paddleocr_vl"(자체호스팅, 데이터 국내처리). 모델 가중치를 받을 수 없는
+# 환경(가중치 호스트 차단 등)에선 OCR이 빈 결과(graceful) → 개발/클라우드는 OCR_BACKEND="vision".
+OCR_BACKEND = os.environ.get("OCR_BACKEND", "paddleocr_vl")
 
 OCR_SCALE = 2.0            # 렌더 배율(≈144DPI; A4 기준 ~1.7K, scale 2.0이면 ~2K폭)
 OCR_MAX_PAGES = 20         # 비용/시간 방어 상한

@@ -216,37 +216,72 @@ def test_endpoint_sse_event_order():
     assert any(e["type"] == "page" for e in events), "page 이벤트가 최소 1개여야"
 
 
-def test_ocr_vision_path_smoke():
-    """8. OCR 경로: 이미지전용(스캔본) PDF → 라우팅 scan → 비전 OCR(gpt-5.5) → Block[].
-
-    PaddleOCR-VL은 가중치 차단 환경에서 미동작하므로, 기본 백엔드(vision)로 OCR 분기를
-    실측한다(거주 정책은 추후 — 챗봇과 동일하게 외부 LLM 사용).
-    """
-    if not _HAS_KEY:
-        return  # OCR(vision)는 LLM 필요
-    sample = _sample_pdf_bytes()
-    if sample is None:
-        return
+def _make_scanned_pdf(sample: bytes):
+    """기획서 p1을 렌더해 텍스트 레이어 없는 이미지전용 PDF(스캔본) 생성. 실패 시 None."""
     try:
         import io
 
         import pypdfium2 as pdfium
     except ImportError:
-        return
-    # 기획서 p1을 렌더해 텍스트 레이어 없는 이미지전용 PDF(스캔본) 생성
+        return None
     img = pdfium.PdfDocument(sample)[0].render(scale=2.0).to_pil().convert("RGB")
     buf = io.BytesIO()
     img.save(buf, "PDF")
-    scanned = buf.getvalue()
+    return buf.getvalue()
+
+
+def test_default_backend_is_paddleocr_vl():
+    """8. 기본 OCR 백엔드는 paddleocr_vl(프로덕션 자체호스팅) — 결정론, 항상 실행."""
+    import app.pdf.extract_ocr as eo
+
+    assert eo.OCR_BACKEND == "paddleocr_vl", f"기본 OCR_BACKEND={eo.OCR_BACKEND!r}"
+
+
+def test_paddleocr_vl_graceful_without_weights():
+    """9. 가중치 못 받는 환경에서 paddleocr_vl은 예외 없이 빈 결과(graceful) — 결정론."""
+    sample = _sample_pdf_bytes()
+    if sample is None:
+        return
+    scanned = _make_scanned_pdf(sample)
+    if scanned is None:
+        return
+    import app.pdf.extract_ocr as eo
+
+    saved = eo.OCR_BACKEND
+    try:
+        eo.OCR_BACKEND = "paddleocr_vl"
+        blocks = eo.extract_ocr(scanned, pages=[1])  # 가중치 없으면 [] (예외 안 남)
+    finally:
+        eo.OCR_BACKEND = saved
+    assert isinstance(blocks, list)  # 예외 없이 리스트(빈 것 포함) 반환
+
+
+def test_ocr_vision_backend_smoke():
+    """10. vision 백엔드(개발/클라우드) OCR 분기 실측: 스캔본 → 비전 OCR(gpt-5.5) → Block[]."""
+    if not _HAS_KEY:
+        return  # vision은 LLM 필요
+    sample = _sample_pdf_bytes()
+    if sample is None:
+        return
+    scanned = _make_scanned_pdf(sample)
+    if scanned is None:
+        return
 
     from app.pdf.routing import route_pages
 
     routes = route_pages(scanned)
     assert routes and routes[0].route == "scan", "이미지전용 PDF는 scan으로 라우팅돼야"
 
-    from app.pdf.pipeline import process_pdf
+    import app.pdf.extract_ocr as eo
 
-    r = process_pdf(scanned, doc_id="scanned", top_k=4)
+    saved = eo.OCR_BACKEND
+    try:
+        eo.OCR_BACKEND = "vision"  # 이 환경은 paddleocr_vl 가중치 차단 → vision으로 실측
+        from app.pdf.pipeline import process_pdf
+
+        r = process_pdf(scanned, doc_id="scanned", top_k=4)
+    finally:
+        eo.OCR_BACKEND = saved
     ocr_blocks = [b for b in r["document"].blocks if b.source == "ocr"]
     assert ocr_blocks, "비전 OCR이 블록을 추출해야"
     assert any(b.text.strip() for b in ocr_blocks), "추출 텍스트가 비어있지 않아야"
@@ -261,11 +296,13 @@ _DETERMINISTIC = [
     ("segment (목 Block 제외/유지)", test_segment_excludes_and_keeps),
     ("revise (목 Document 치환/보존)", test_revise_mock_document),
     ("pipeline (비-LLM p2)", test_pipeline_non_llm_path),
+    ("기본 OCR 백엔드 = paddleocr_vl", test_default_backend_is_paddleocr_vl),
+    ("paddleocr_vl graceful (가중치 없음)", test_paddleocr_vl_graceful_without_weights),
 ]
 _LLM = [
     ("review_segments (광고 위험판정)", test_review_segments_smoke),
     ("endpoint SSE (routes→page→done)", test_endpoint_sse_event_order),
-    ("OCR 비전 경로 (스캔본→Block)", test_ocr_vision_path_smoke),
+    ("OCR vision 백엔드 (스캔본→Block)", test_ocr_vision_backend_smoke),
 ]
 
 
