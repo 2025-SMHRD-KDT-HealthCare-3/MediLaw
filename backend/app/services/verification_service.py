@@ -1,4 +1,5 @@
 import re
+import logging
 
 from sqlalchemy.orm import Session
 
@@ -10,6 +11,8 @@ from app.services import hms_client
 from app.services.ai_answer_service import persist_hms_verifications
 from app.services.room_service import ensure_room_access
 
+logger = logging.getLogger(__name__)
+
 
 def create_verification(db: Session, data: VerificationCreate):
     try:
@@ -18,6 +21,7 @@ def create_verification(db: Session, data: VerificationCreate):
         db.refresh(verification)
         return verification
     except Exception:
+        logger.exception("verification create failed ans_id=%s user_id=%s", data.ans_id, data.user_id)
         db.rollback()
         raise
 
@@ -72,17 +76,19 @@ def verify_answer(db: Session, ans_id: int, current_user: User):
         _build_hms_citations(db, ans_id),
     )
     try:
+        verification_repository.delete_for_answer(db, ans_id)
         verifications = persist_hms_verifications(
             db,
             ans_id,
             current_user.user_id,
-            hms_response,
+            hms_response.get("output", []) if isinstance(hms_response.get("output"), list) else [],
         )
         db.commit()
         for verification in verifications:
             db.refresh(verification)
         return verifications
     except Exception:
+        logger.exception("answer verification failed ans_id=%s user_id=%s", ans_id, current_user.user_id)
         db.rollback()
         raise
 

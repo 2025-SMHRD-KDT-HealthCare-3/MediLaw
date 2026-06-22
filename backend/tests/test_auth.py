@@ -28,3 +28,28 @@ def test_signup_rejects_duplicate_email(client):
         },
     )
     assert response.status_code == 400
+
+
+def test_login_rejects_repeated_failed_attempts(client):
+    client.post(
+        "/api/auth/signup",
+        json={
+            "login_id": "limited-user",
+            "password": "password123",
+            "name": "Limited User",
+            "email": "limited@example.com",
+        },
+    )
+
+    for _ in range(11):
+        response = client.post(
+            "/api/auth/login",
+            json={"login_id": "limited-user", "password": "wrong-password"},
+        )
+
+    assert response.status_code == 429
+
+
+def test_logout_requires_authentication(client):
+    response = client.post("/api/auth/logout")
+    assert response.status_code == 401

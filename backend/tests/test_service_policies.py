@@ -150,6 +150,14 @@ def test_summary_create_requires_admin(client, mock_hms):
     assert admin_response.json()["data"]["admin_id"] != 0
     assert "checklist_summary" in admin_response.json()["data"]["summary"]
 
+    duplicate_response = client.post(
+        f"/api/rooms/{room_id}/summaries",
+        json={},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert duplicate_response.status_code == 200
+    assert duplicate_response.json()["data"]["summary_id"] == admin_response.json()["data"]["summary_id"]
+
 
 def test_invalid_file_reference_rejected(client):
     token = signup_and_login(client)

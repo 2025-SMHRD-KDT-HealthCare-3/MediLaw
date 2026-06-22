@@ -1,9 +1,13 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.user import User
 from app.repositories import room_repository
 from app.schemas.room_schema import RoomCreate, RoomUpdate
+
+logger = logging.getLogger(__name__)
 
 
 def create_room(db: Session, user_id: int, data: RoomCreate):
@@ -15,6 +19,7 @@ def create_room(db: Session, user_id: int, data: RoomCreate):
         db.refresh(room)
         return room
     except Exception:
+        logger.exception("room create failed user_id=%s", user_id)
         db.rollback()
         raise
 
@@ -62,6 +67,7 @@ def close_room(db: Session, room_id: int, current_user: User):
         db.refresh(updated)
         return updated
     except Exception:
+        logger.exception("room close failed room_id=%s user_id=%s", room_id, current_user.user_id)
         db.rollback()
         raise
 
@@ -74,6 +80,7 @@ def delete_room(db: Session, room_id: int, current_user: User) -> dict:
         db.commit()
         return {"room_id": room_id, "deleted": True}
     except Exception:
+        logger.exception("room delete failed room_id=%s user_id=%s", room_id, current_user.user_id)
         db.rollback()
         raise
 
@@ -86,5 +93,6 @@ def update_room(db: Session, room_id: int, data: RoomUpdate, current_user: User)
         db.refresh(updated)
         return updated
     except Exception:
+        logger.exception("room update failed room_id=%s user_id=%s", room_id, current_user.user_id)
         db.rollback()
         raise

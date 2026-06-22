@@ -2,20 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.ai_ad_copy import AiAdCopy
-from app.schemas.ai_ad_copy_schema import AiAdCopyCreate, AiAdCopyUpdate
-
-
-def create(
-    db: Session,
-    user_id: int,
-    data: AiAdCopyCreate,
-    analysis: dict[str, str | None],
-) -> AiAdCopy:
-    ai_copy = AiAdCopy(**data.model_dump(), **analysis, user_id=user_id)
-    db.add(ai_copy)
-    db.flush()
-    db.refresh(ai_copy)
-    return ai_copy
+from app.schemas.ai_ad_copy_schema import AiAdCopyUpdate
 
 
 def create_from_hms_review(
