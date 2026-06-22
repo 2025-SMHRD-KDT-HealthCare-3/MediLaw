@@ -20,4 +20,12 @@ sqlite-vec==0.1.6
 # 기능 4 — MCP Server (FastAPI에 /mcp SSE로 마운트)
 mcp==1.27.2
 sse-starlette==3.4.4
+
+# PDF 능동형 에디터 — 디지털 추출(표/레이아웃)
 pdfplumber==0.11.10
+
+# ─ PDF 스캔본 OCR 백엔드(OCR_BACKEND=paddleocr_vl)용 선택 의존성 ─────────────
+# 무겁고(≈1.5GB+) 모델 로딩에 RAM 6~8GB+(권장 GPU)가 필요해 기본 설치에서 제외.
+# 스캔본 OCR을 자체호스팅(국내처리)하려면 아래를 설치:
+#   pip install paddlepaddle==3.3.1 "paddleocr[doc-parser]==3.7.0" "paddlex[ocr]==3.7.1"
+# 미설치 시: 디지털 PDF는 정상, 스캔본 OCR은 빈 결과(graceful). 클라우드 대안은 OCR_BACKEND=vision.

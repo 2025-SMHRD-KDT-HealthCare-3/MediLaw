@@ -9,3 +9,4 @@ data/*.zip
 # 기획서 등 문서 초안은 git 제외 (law-app 관례)
 *.pdf
 *.pdf:Zone.Identifier
+*:Zone.Identifier
