@@ -7,7 +7,7 @@ route_pages → 페이지별 extract_digital / extract_ocr → Document.blocks
 """
 from typing import Optional
 
-from app.pdf import extract_digital, extract_ocr, review, revise, routing, segment
+from app.pdf import classify, extract_digital, extract_ocr, review, revise, routing, segment
 from app.pdf.schema import Document
 
 
@@ -35,6 +35,10 @@ def process_pdf(
     if scan_pages and ocr:
         blocks += extract_ocr.extract_ocr(pdf_bytes, pages=scan_pages)
     blocks.sort(key=lambda b: b.page)  # 페이지 순(페이지 집합이 disjoint라 안정)
+
+    # doc_type 미지정 시 추출 텍스트로 자동 분류(주어지면 그대로 — 하위호환).
+    if doc_type is None and blocks:
+        doc_type = classify.classify_blocks(blocks)
 
     doc = Document(doc_id=doc_id, doc_type=doc_type, page_count=len(routes), blocks=blocks)
 
