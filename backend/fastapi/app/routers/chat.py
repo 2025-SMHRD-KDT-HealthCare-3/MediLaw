@@ -6,6 +6,7 @@ POST /chat          : 단발 JSON
 POST /chat/stream   : SSE 토큰 스트리밍 (sources → token... → done)
 """
 import json
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -16,6 +17,7 @@ from app.citations import extract_and_verify, summarize
 from app.english import detect_lang, english_article
 from app.rag import hybrid_search
 from app.schemas import (
+    AnswerSegment,
     ChatRequest,
     ChatResponse,
     ChatSource,
@@ -27,6 +29,29 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="", tags=["AI 챗봇"])
+
+_CITE_RE = re.compile(r"\[(\d+)\]")
+
+
+def segment_answer(answer: str, sources: list[ChatSource]) -> list[AnswerSegment]:
+    """answer 문자열의 [n]을 sources(n 기준)와 매칭해 text/cite 토큰 배열로 쪼갠다.
+    sources에 없는 [n]은 텍스트로 강등(환각/오번호 방어)."""
+    by_n = {s.n: s for s in sources}
+    segs: list[AnswerSegment] = []
+    last = 0
+    for m in _CITE_RE.finditer(answer or ""):
+        if m.start() > last:
+            segs.append(AnswerSegment(type="text", text=answer[last:m.start()]))
+        src = by_n.get(int(m.group(1)))
+        if src:
+            segs.append(AnswerSegment(type="cite", text=m.group(0), n=src.n,
+                source_type=src.source_type, source_id=src.source_id, label=src.label))
+        else:
+            segs.append(AnswerSegment(type="text", text=m.group(0)))
+        last = m.end()
+    if answer and last < len(answer):
+        segs.append(AnswerSegment(type="text", text=answer[last:]))
+    return segs
 
 MAX_HISTORY = 10  # 토큰 방어 — 최근 N턴만 LLM에 전달
 
@@ -148,13 +173,15 @@ def chat(req: ChatRequest):
     decision = _domain_route(req)
     if not domain_router.is_in_scope(decision):  # Tier 3 → 거절
         refusal = _OUT_OF_DOMAIN_EN if lang == "en" else _OUT_OF_DOMAIN
-        return ChatResponse(answer=refusal, sources=[], method="none", lang=lang,
+        return ChatResponse(answer=refusal, answer_segments=segment_answer(refusal, []),
+                            sources=[], method="none", lang=lang,
                             search_query=req.question,
                             citation_check=_citation_check("", req.as_of), as_of=req.as_of)
     messages, sources, method, lang, search_q = _build(req)
     no_ev = _NO_EVIDENCE_EN if lang == "en" else _NO_EVIDENCE
     if messages is None:
-        return ChatResponse(answer=no_ev, sources=[], method=method, lang=lang,
+        return ChatResponse(answer=no_ev, answer_segments=segment_answer(no_ev, []),
+                            sources=[], method=method, lang=lang,
                             search_query=search_q,
                             citation_check=_citation_check("", req.as_of), as_of=req.as_of)
     try:
@@ -164,7 +191,8 @@ def chat(req: ChatRequest):
     if decision["needs_clarification"]:  # Tier 2 모호 → 답변 끝에 되묻기 한 줄
         answer += _CLARIFY_EN if lang == "en" else _CLARIFY
     return ChatResponse(
-        answer=answer, sources=sources, method=method, lang=lang, search_query=search_q,
+        answer=answer, answer_segments=segment_answer(answer, sources),
+        sources=sources, method=method, lang=lang, search_query=search_q,
         citation_check=_citation_check(answer, req.as_of), as_of=req.as_of,
     )
 
@@ -184,7 +212,8 @@ def chat_stream(req: ChatRequest):
             yield _sse({"type": "sources", "method": "none", "lang": lang,
                         "search_query": req.question, "sources": []})
             yield _sse({"type": "token", "text": refusal})
-            yield _sse({"type": "done", "citation_check": _citation_check("", req.as_of).model_dump()})
+            yield _sse({"type": "done", "citation_check": _citation_check("", req.as_of).model_dump(),
+                        "answer_segments": [s.model_dump() for s in segment_answer(refusal, [])]})
 
         return StreamingResponse(gen_refuse(), media_type="text/event-stream")
 
@@ -194,8 +223,10 @@ def chat_stream(req: ChatRequest):
         yield _sse({"type": "sources", "method": method, "lang": lang, "search_query": search_q,
                     "sources": [s.model_dump() for s in sources]})
         if messages is None:
-            yield _sse({"type": "token", "text": _NO_EVIDENCE_EN if lang == "en" else _NO_EVIDENCE})
-            yield _sse({"type": "done", "citation_check": _citation_check("", req.as_of).model_dump()})
+            no_ev = _NO_EVIDENCE_EN if lang == "en" else _NO_EVIDENCE
+            yield _sse({"type": "token", "text": no_ev})
+            yield _sse({"type": "done", "citation_check": _citation_check("", req.as_of).model_dump(),
+                        "answer_segments": [s.model_dump() for s in segment_answer(no_ev, [])]})
             return
         parts = []
         try:
@@ -208,7 +239,8 @@ def chat_stream(req: ChatRequest):
         if decision["needs_clarification"]:  # Tier 2 모호 → 되묻기 한 줄 추가 토큰
             yield _sse({"type": "token", "text": _CLARIFY_EN if lang == "en" else _CLARIFY})
         answer = "".join(parts)
-        yield _sse({"type": "done", "citation_check": _citation_check(answer, req.as_of).model_dump()})
+        yield _sse({"type": "done", "citation_check": _citation_check(answer, req.as_of).model_dump(),
+                    "answer_segments": [s.model_dump() for s in segment_answer(answer, sources)]})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
