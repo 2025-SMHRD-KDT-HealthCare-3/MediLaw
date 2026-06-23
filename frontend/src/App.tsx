@@ -6,6 +6,7 @@ import MyPage from './pages/MyPage'
 import ProtectedRoute from './components/ProtectedRoute'
 import { useAuthStore } from './store/authStore'
 import AdReview from './pages/AdReview'
+import Signup from './pages/Signup'
 
 function App() {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn)
@@ -37,6 +38,7 @@ function App() {
 
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
         <Route path="/chat" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/ad-review" element={<ProtectedRoute><AdReview /></ProtectedRoute>} />
