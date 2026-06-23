@@ -45,3 +45,11 @@ def test_ai_answer_creates_evidence_and_verification(client, mock_hms):
         "ERROR",
     }
     assert verify_data[0]["confidence_score"] == "91.00"
+
+    verification_list_response = client.get(
+        f"/api/answers/{ans_id}/verifications",
+        headers=headers,
+    )
+    assert verification_list_response.status_code == 200
+    assert len(verification_list_response.json()["data"]) == 1
+    assert verification_list_response.json()["data"][0]["confidence_score"] == "91.00"

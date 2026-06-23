@@ -1,8 +1,12 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError
 from app.repositories import user_repository
 from app.schemas.user_schema import UserUpdate
+
+logger = logging.getLogger(__name__)
 
 
 def get_me(db: Session, user_id: int):
@@ -26,6 +30,7 @@ def update_me(db: Session, user_id: int, data: UserUpdate):
         db.refresh(updated)
         return updated
     except Exception:
+        logger.exception("user update failed user_id=%s", user_id)
         db.rollback()
         raise
 

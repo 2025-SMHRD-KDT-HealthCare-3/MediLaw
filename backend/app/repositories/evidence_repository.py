@@ -19,7 +19,7 @@ def get_by_id(db: Session, evidence_id: int) -> Evidence | None:
 
 def get_list(db: Session, ans_id: int | None = None, skip: int = 0, limit: int = 100) -> list[Evidence]:
     # TODO: add source filtering if multiple law providers are introduced.
-    stmt = select(Evidence)
+    stmt = select(Evidence).order_by(Evidence.created_at.asc(), Evidence.evidence_id.asc())
     if ans_id is not None:
         stmt = stmt.where(Evidence.ans_id == ans_id)
     return list(db.scalars(stmt.offset(skip).limit(limit)).all())

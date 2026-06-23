@@ -1,4 +1,5 @@
 import json
+import logging
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -10,8 +11,14 @@ from app.repositories import ai_ad_copy_repository, chat_repository
 from app.schemas.ai_ad_copy_schema import AiAdCopyCreate
 from app.schemas.chat_schema import ChatCreate
 from app.services import hms_client
-from app.services.ai_answer_service import persist_hms_sources, persist_hms_verifications
+from app.services.ai_answer_service import (
+    hms_verification_output,
+    persist_hms_sources,
+    persist_hms_verifications,
+)
 from app.services.room_service import ensure_room_open
+
+logger = logging.getLogger(__name__)
 
 
 def analyze_and_create(db: Session, current_user: User, data: AiAdCopyCreate):
@@ -113,6 +120,9 @@ def review_document_and_create(
             detail="text or file is required",
         )
 
+    if room_id is not None:
+        ensure_room_open(db, room_id, current_user)
+
     hms_response = _call_hms_document_review(
         text=text,
         file_name=file_name,
@@ -150,7 +160,6 @@ def review_document_and_create(
         )
         verifications = []
         if room_id is not None:
-            ensure_room_open(db, room_id, current_user)
             user_chat = chat_repository.create(
                 db,
                 room_id,
@@ -174,7 +183,7 @@ def review_document_and_create(
                 db,
                 ai_chat.chat_id,
                 current_user.user_id,
-                hms_response.get("citation_check"),
+                hms_verification_output(hms_response.get("citation_check")),
             )
             evidences = persist_hms_sources(
                 db,
@@ -200,6 +209,11 @@ def review_document_and_create(
             "hms": hms_response,
         }
     except Exception:
+        logger.exception(
+            "ad copy review persist failed user_id=%s room_id=%s",
+            current_user.user_id,
+            room_id,
+        )
         db.rollback()
         raise
 

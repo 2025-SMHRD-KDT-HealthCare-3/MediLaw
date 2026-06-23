@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
@@ -17,6 +19,8 @@ from app.services.hms_mapping import (
     verification_reason,
 )
 from app.services.room_service import ensure_room_open
+
+logger = logging.getLogger(__name__)
 
 HISTORY_LIMIT = 10
 AI_FAILURE_MESSAGE = "\ud604\uc7ac AI \ub2f5\ubcc0 \uc0dd\uc131\uc5d0 \uc2e4\ud328\ud588\uc2b5\ub2c8\ub2e4. \uc7a0\uc2dc \ud6c4 \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694."
@@ -84,11 +88,10 @@ def persist_hms_verifications(
     db: Session,
     ans_id: int,
     user_id: int,
-    citation_check: dict | None,
+    output_items: list[dict],
 ) -> list:
     verifications = []
-    output = citation_check.get("output", []) if isinstance(citation_check, dict) else []
-    for item in output:
+    for item in output_items:
         if not isinstance(item, dict):
             continue
         law_name, article_no = parse_law_label(item.get("matched_label") or item.get("raw"))
@@ -112,6 +115,13 @@ def persist_hms_verifications(
     return verifications
 
 
+def hms_verification_output(citation_check: dict | None) -> list[dict]:
+    if not isinstance(citation_check, dict):
+        return []
+    output = citation_check.get("output", [])
+    return output if isinstance(output, list) else []
+
+
 def create_ai_answer(db: Session, room_id: int, current_user: User, question: str) -> dict:
     """Persist the user question first, then call HMS and persist the answer."""
     ensure_room_open(db, room_id, current_user)
@@ -124,6 +134,7 @@ def create_ai_answer(db: Session, room_id: int, current_user: User, question: st
         db.commit()
         db.refresh(user_chat)
     except Exception:
+        logger.exception("AI question persist failed room_id=%s user_id=%s", room_id, current_user.user_id)
         db.rollback()
         raise
 
@@ -140,6 +151,7 @@ def create_ai_answer(db: Session, room_id: int, current_user: User, question: st
             db.commit()
             db.refresh(failure_chat)
         except Exception:
+            logger.exception("AI failure message persist failed room_id=%s", room_id)
             db.rollback()
         raise
 
@@ -159,7 +171,7 @@ def create_ai_answer(db: Session, room_id: int, current_user: User, question: st
             db,
             ai_chat.chat_id,
             current_user.user_id,
-            hms_response.get("citation_check"),
+            hms_verification_output(hms_response.get("citation_check")),
         )
 
         db.commit()
@@ -173,5 +185,6 @@ def create_ai_answer(db: Session, room_id: int, current_user: User, question: st
             "hms": hms_response,
         }
     except Exception:
+        logger.exception("AI answer persist failed room_id=%s user_id=%s", room_id, current_user.user_id)
         db.rollback()
         raise

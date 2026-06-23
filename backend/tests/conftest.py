@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.database import Base, get_db
+from app.core.rate_limit import limiter
 from app.main import app
 from app.models import AiAdCopy, Chat, Evidence, Room, Summary, User, Verification  # noqa: F401
 from app.services import hms_client
@@ -17,6 +18,18 @@ engine = create_engine(
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def reset_rate_limiter() -> None:
+    storage = getattr(getattr(limiter, "limiter", None), "storage", None)
+    reset = getattr(storage, "reset", None)
+    if callable(reset):
+        reset()
+        return
+
+    bucket = getattr(storage, "storage", None)
+    if hasattr(bucket, "clear"):
+        bucket.clear()
+
+
 def override_get_db():
     db = TestingSessionLocal()
     try:
@@ -27,6 +40,7 @@ def override_get_db():
 
 @pytest.fixture(autouse=True)
 def reset_database():
+    reset_rate_limiter()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     app.dependency_overrides[get_db] = override_get_db
