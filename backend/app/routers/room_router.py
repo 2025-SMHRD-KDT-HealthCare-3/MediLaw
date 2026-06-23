@@ -43,6 +43,42 @@ def get_room(
     return success_response(jsonable_encoder(RoomResponse.model_validate(room)))
 
 
+@router.post("/{room_id}/leave")
+def leave_room(
+    room_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    room = room_service.leave_room(db, room_id, current_user)
+    return success_response(
+        jsonable_encoder(RoomResponse.model_validate(room)),
+        message="room left",
+    )
+
+
+@router.post("/{room_id}/close")
+def close_room(
+    room_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    room = room_service.close_room(db, room_id, current_user)
+    return success_response(
+        jsonable_encoder(RoomResponse.model_validate(room)),
+        message="room closed",
+    )
+
+
+@router.delete("/{room_id}")
+def delete_room(
+    room_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = room_service.delete_room(db, room_id, current_user)
+    return success_response(result, message="room deleted")
+
+
 @router.patch("/{room_id}")
 def update_room(
     room_id: int,

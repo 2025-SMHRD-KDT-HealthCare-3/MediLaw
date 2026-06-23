@@ -1,11 +1,17 @@
+import re
+import logging
+
 from sqlalchemy.orm import Session
 
-from app.ai.citation_verifier import verify_citation_stub
 from app.core.exceptions import BadRequestError, NotFoundError
 from app.models.user import User
-from app.repositories import chat_repository, verification_repository
+from app.repositories import chat_repository, evidence_repository, verification_repository
 from app.schemas.verification_schema import VerificationCreate
+from app.services import hms_client
+from app.services.ai_answer_service import persist_hms_verifications
 from app.services.room_service import ensure_room_access
+
+logger = logging.getLogger(__name__)
 
 
 def create_verification(db: Session, data: VerificationCreate):
@@ -15,6 +21,7 @@ def create_verification(db: Session, data: VerificationCreate):
         db.refresh(verification)
         return verification
     except Exception:
+        logger.exception("verification create failed ans_id=%s user_id=%s", data.ans_id, data.user_id)
         db.rollback()
         raise
 
@@ -34,19 +41,54 @@ def list_answer_verifications(db: Session, ans_id: int, current_user: User):
     return verification_repository.get_list(db, ans_id=ans_id)
 
 
-def verify_answer_stub(db: Session, ans_id: int, current_user: User):
+def _normalize_article_no(article_no: str | None) -> str | None:
+    if not article_no:
+        return None
+    match = re.search(r"\d+(?:-\d+)?", article_no)
+    return match.group(0) if match else article_no
+
+
+def _build_hms_citations(db: Session, ans_id: int) -> list[dict]:
+    citations = []
+    for evidence in evidence_repository.get_list(db, ans_id=ans_id):
+        if evidence.law_name and evidence.article_no:
+            citations.append(
+                {
+                    "law_name": evidence.law_name,
+                    "article_no": _normalize_article_no(evidence.article_no),
+                }
+            )
+        elif evidence.law_name:
+            citations.append({"raw": evidence.law_name})
+    return citations
+
+
+def _call_hms_verify(answer_text: str | None, citations: list[dict]) -> dict:
+    payload = {"citations": citations} if citations else {"text": answer_text or ""}
+    return hms_client.post_json("/v1/verify", payload, timeout=120)
+
+
+def verify_answer(db: Session, ans_id: int, current_user: User):
     answer_chat = _get_ai_answer_or_raise(db, ans_id)
     ensure_room_access(db, answer_chat.room_id, current_user)
-    result = verify_citation_stub(
-        {"law_name": "의료법", "article_no": "제56조", "answer_text": answer_chat.chat_text}
+    hms_response = _call_hms_verify(
+        answer_chat.chat_text,
+        _build_hms_citations(db, ans_id),
     )
-    data = VerificationCreate(ans_id=ans_id, user_id=current_user.user_id, **result)
     try:
-        verification = verification_repository.create(db, data)
+        verification_repository.delete_for_answer(db, ans_id)
+        verifications = persist_hms_verifications(
+            db,
+            ans_id,
+            current_user.user_id,
+            hms_response.get("output", []) if isinstance(hms_response.get("output"), list) else [],
+        )
         db.commit()
-        db.refresh(verification)
-        return verification
+        for verification in verifications:
+            db.refresh(verification)
+        return verifications
     except Exception:
+        logger.exception("answer verification failed ans_id=%s user_id=%s", ans_id, current_user.user_id)
         db.rollback()
         raise
 

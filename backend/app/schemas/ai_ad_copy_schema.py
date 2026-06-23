@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator
 class AiAdCopyCreate(BaseModel):
     input_language: Literal["ko", "en"] = "ko"
     input_text: str = Field(min_length=1, max_length=5000)
+    room_id: int | None = Field(default=None, ge=1)
 
     @field_validator("input_text", mode="before")
     @classmethod

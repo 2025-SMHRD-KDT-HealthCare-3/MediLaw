@@ -1,3 +1,5 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestError, NotFoundError
@@ -7,6 +9,8 @@ from app.repositories import evidence_repository
 from app.schemas.evidence_schema import EvidenceCreate
 from app.services.room_service import ensure_room_access
 
+logger = logging.getLogger(__name__)
+
 
 def create_evidence(db: Session, data: EvidenceCreate):
     try:
@@ -15,6 +19,7 @@ def create_evidence(db: Session, data: EvidenceCreate):
         db.refresh(evidence)
         return evidence
     except Exception:
+        logger.exception("evidence create failed ans_id=%s", data.ans_id)
         db.rollback()
         raise
 

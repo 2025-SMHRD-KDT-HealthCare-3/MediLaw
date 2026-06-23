@@ -25,6 +25,16 @@ def get_list(db: Session, room_id: int | None = None, skip: int = 0, limit: int 
     return list(db.scalars(stmt.offset(skip).limit(limit)).all())
 
 
+def get_recent_for_room(db: Session, room_id: int, limit: int = 10) -> list[Chat]:
+    stmt = (
+        select(Chat)
+        .where(Chat.room_id == room_id)
+        .order_by(Chat.chatted_at.desc(), Chat.chat_id.desc())
+        .limit(limit)
+    )
+    return list(reversed(list(db.scalars(stmt).all())))
+
+
 def update(db: Session, chat: Chat, data: ChatUpdate) -> Chat:
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(chat, key, value)

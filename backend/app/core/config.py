@@ -8,7 +8,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "mysql+pymysql://medilaw:medilaw@localhost:3306/medilaw"
     JWT_SECRET_KEY: str = "change-me"
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    HMS_URL: str = "http://127.0.0.1:8000"
+    HMS_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
     LAW_API_KEY: str | None = None
     UPLOAD_DIR: str = "storage/uploads"
@@ -29,6 +31,8 @@ class Settings(BaseSettings):
             "replace-with-secure-secret",
         }:
             raise RuntimeError("JWT_SECRET_KEY must be changed in production")
+        if self.ENVIRONMENT.lower() in {"prod", "production"} and self.CORS_ORIGINS.strip() == "*":
+            raise RuntimeError("CORS_ORIGINS must be explicit in production")
 
 
 @lru_cache

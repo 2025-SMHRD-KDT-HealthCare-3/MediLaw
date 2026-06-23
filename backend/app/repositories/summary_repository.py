@@ -25,6 +25,16 @@ def get_list(db: Session, room_id: int | None = None, skip: int = 0, limit: int 
     return list(db.scalars(stmt.offset(skip).limit(limit)).all())
 
 
+def get_unconfirmed_for_room(db: Session, room_id: int) -> Summary | None:
+    stmt = (
+        select(Summary)
+        .where(Summary.room_id == room_id, Summary.is_confirmed.is_(False))
+        .order_by(Summary.created_at.desc(), Summary.summary_id.desc())
+        .limit(1)
+    )
+    return db.scalars(stmt).first()
+
+
 def update(db: Session, summary: Summary, data: SummaryUpdate) -> Summary:
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(summary, key, value)

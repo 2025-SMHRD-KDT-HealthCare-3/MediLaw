@@ -1,3 +1,5 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestError, UnauthorizedError
@@ -5,6 +7,8 @@ from app.core.security import create_access_token, get_password_hash, verify_pas
 from app.repositories import user_repository
 from app.schemas.auth_schema import LoginRequest, SignupRequest, TokenResponse
 from app.schemas.user_schema import UserCreate
+
+logger = logging.getLogger(__name__)
 
 
 def signup(db: Session, data: SignupRequest):
@@ -20,6 +24,7 @@ def signup(db: Session, data: SignupRequest):
         db.refresh(user)
         return user
     except Exception:
+        logger.exception("signup failed login_id=%s", data.login_id)
         db.rollback()
         raise
 

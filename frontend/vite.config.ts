@@ -10,7 +10,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://192.168.219.54:4000', // 팀원 백엔드. IP 바뀌면 이 줄만 교체
+        target: 'http://192.168.219.54:4000', // 백엔드 주소. IP 바뀌면 이 줄만 교체
         changeOrigin: true,
       },
     },
