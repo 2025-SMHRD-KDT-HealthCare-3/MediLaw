@@ -1,6 +1,8 @@
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
@@ -51,6 +53,18 @@ async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse
     return JSONResponse(
         status_code=exc.status_code,
         content=error_response(str(exc.detail), code=str(exc.status_code)),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content=error_response(
+            "validation error",
+            code="422",
+            data=jsonable_encoder(exc.errors()),
+        ),
     )
 
 

@@ -14,6 +14,16 @@ DEFAULT_TIMEOUT = 120
 DOCUMENT_TIMEOUT = 180
 
 
+def _is_production() -> bool:
+    return settings.ENVIRONMENT.lower() in {"prod", "production"}
+
+
+def _hms_error_detail(exc: httpx.HTTPError) -> str:
+    if _is_production():
+        return "HMS request failed"
+    return f"HMS request failed: {exc}"
+
+
 def _url(path: str) -> str:
     return f"{settings.HMS_URL.rstrip('/')}/{path.lstrip('/')}"
 
@@ -36,7 +46,7 @@ def post_json(path: str, payload: dict[str, Any], *, timeout: int = DEFAULT_TIME
         logger.exception("HMS JSON request failed path=%s", path)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"HMS request failed: {exc}",
+            detail=_hms_error_detail(exc),
         ) from exc
     except ValueError as exc:
         raise HTTPException(
@@ -67,7 +77,7 @@ def post_multipart(
         logger.exception("HMS multipart request failed path=%s", path)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"HMS request failed: {exc}",
+            detail=_hms_error_detail(exc),
         ) from exc
     except ValueError as exc:
         raise HTTPException(

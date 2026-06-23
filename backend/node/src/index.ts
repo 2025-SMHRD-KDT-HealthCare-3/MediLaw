@@ -14,6 +14,11 @@ const FASTAPI_TARGET = process.env.FASTAPI_TARGET ?? 'http://127.0.0.1:8000'
 const PRODUCT_API_TARGET = process.env.PRODUCT_API_TARGET ?? 'http://127.0.0.1:8001'
 const HMS_API_KEY = process.env.HMS_API_KEY ?? ''
 const PROD = process.env.NODE_ENV === 'production'
+const ACCESS_TOKEN_EXPIRE_MINUTES = Number(process.env.ACCESS_TOKEN_EXPIRE_MINUTES ?? '30')
+const SESSION_MAX_AGE_MS =
+  Number.isFinite(ACCESS_TOKEN_EXPIRE_MINUTES) && ACCESS_TOKEN_EXPIRE_MINUTES > 0
+    ? ACCESS_TOKEN_EXPIRE_MINUTES * 60_000
+    : 30 * 60_000
 
 const successPayload = (data: any = null, message = 'success') => ({
   success: true,
@@ -71,7 +76,14 @@ app.get('/api/health', (_req, res) => {
   })
 })
 
-app.post('/api/auth/login', express.json(), async (req, res) => {
+const authLoginLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+app.post('/api/auth/login', authLoginLimiter, express.json(), async (req, res) => {
   try {
     const upstream = await fetch(`${PRODUCT_API_TARGET}/api/auth/login`, {
       method: 'POST',
@@ -86,7 +98,7 @@ app.post('/api/auth/login', express.json(), async (req, res) => {
         httpOnly: true,
         secure: PROD,
         sameSite: 'lax',
-        maxAge: 3_600_000,
+        maxAge: SESSION_MAX_AGE_MS,
         path: '/',
       })
 
@@ -179,6 +191,14 @@ app.use(
       proxyReq: (proxyReq: any, req: any) => {
         const token = req.cookies?.session
         if (token) proxyReq.setHeader('Authorization', `Bearer ${token}`)
+      },
+      proxyRes: (proxyRes: any, _req: any, res: any) => {
+        if (proxyRes.statusCode === 401 && typeof res?.setHeader === 'function') {
+          res.setHeader(
+            'Set-Cookie',
+            `session=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax${PROD ? '; Secure' : ''}`,
+          )
+        }
       },
       error: proxyErrorHandler,
     },
