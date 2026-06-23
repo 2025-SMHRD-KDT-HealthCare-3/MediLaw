@@ -20,13 +20,14 @@ OCR 백엔드는 OCR_BACKEND 환경변수로 교체한다.
       남기고 **빈 결과로 graceful degrade**한다(예외 전파 금지). 가중치를 받을 수 있는
       프로덕션(국내 서버)에서 실제로 동작한다.
 
-  "vision"        (개발 폴백, 기본값):
-      기존 app.llm.ocr_image(b64_png)(OpenAI 비전) 재사용.
-      ⚠️ 외부(OpenAI) 호출이므로 **데이터 거주 정책 위반 — 개발용 폴백 전용**이다.
-      프로덕션에서는 반드시 OCR_BACKEND="paddleocr_vl" 로 전환할 것.
+  "vision"        (폴백):
+      기존 app.llm.ocr_image(b64_png)(OpenAI 비전, gpt-5.5) 재사용.
+      ⚠️ 외부(OpenAI) 호출이므로 **데이터 거주 정책상 유의** — 가능하면 paddleocr_vl 사용.
 
-기본값이 "vision"인 이유: 이 환경에 paddleocr_vl 모델 가중치가 없어 개발 검증이
-가능한 폴백을 기본으로 둔다. 운영 배포 시 환경변수로 강제 전환한다.
+1차 → 폴백 자동 전환(OCR_FALLBACK_BACKEND, 기본 "vision"):
+  1차 백엔드(OCR_BACKEND, 기본 paddleocr_vl)가 어떤 페이지에서 빈 결과/예외면
+  그 페이지를 폴백 백엔드로 한 번 더 시도한다. 즉 가중치 차단/추론 실패로 PaddleOCR-VL이
+  빈 결과를 내면 자동으로 gpt-5.5 비전이 OCR을 이어받는다. 폴백을 끄려면 OCR_FALLBACK_BACKEND="".
 
 import 시 paddle/모델 로딩이나 네트워크 시도가 일어나지 않도록, paddleocr import 및
 PaddleOCRVL 인스턴스화는 모두 `paddleocr_vl` 백엔드 첫 호출 시점으로 **지연**한다.
@@ -49,6 +50,12 @@ from app.pdf.schema import Block  # noqa: E402
 # 백엔드 선택: 기본 "paddleocr_vl"(자체호스팅, 데이터 국내처리). 모델 가중치를 받을 수 없는
 # 환경(가중치 호스트 차단 등)에선 OCR이 빈 결과(graceful) → 개발/클라우드는 OCR_BACKEND="vision".
 OCR_BACKEND = os.environ.get("OCR_BACKEND", "paddleocr_vl")
+
+# 폴백 백엔드: 1차 백엔드가 빈 결과/실패면 페이지 단위로 여기에 재시도한다.
+# 프로덕션 paddleocr_vl 가중치 차단/추론 실패 시 "vision"(gpt-5.5 비전, OpenAI)으로 넘겨 OCR.
+# ""(빈 문자열)이면 폴백 비활성. 1차와 동일 백엔드면 무시.
+# ⚠️ vision 폴백은 외부(OpenAI) 호출이라 데이터 거주 정책상 유의 — 요청에 의해 기본 활성.
+OCR_FALLBACK_BACKEND = os.environ.get("OCR_FALLBACK_BACKEND", "vision")
 
 OCR_SCALE = 2.0            # 렌더 배율(≈144DPI; A4 기준 ~1.7K, scale 2.0이면 ~2K폭)
 OCR_MAX_PAGES = 20         # 비용/시간 방어 상한
@@ -265,20 +272,14 @@ def _get_paddle_vl():
         return None
     try:
         # 인스턴스화 시 모델 가중치 해석/다운로드가 일어난다. 차단 환경에선 여기서 실패.
-        kwargs = {}
-        server_url = os.environ.get("PADDLE_OCR_VL_SERVER_URL")
-        if server_url:
-            # 자체 호스팅 VL 추론 서버(vLLM 등) 사용 시 — 로컬 가중치 로딩 없음.
-            kwargs["vl_rec_backend"] = os.environ.get("PADDLE_OCR_VL_BACKEND", "vllm-server")
-            kwargs["vl_rec_server_url"] = server_url
-        elif not _has_enough_memory():
+        if not _has_enough_memory():
             # 로컬 로딩인데 메모리 부족 → OOM-킬 방지 위해 시도조차 안 함.
             print(f"[extract_ocr] 가용 메모리가 {_MIN_OCR_RAM_BYTES // (1024**3)}GB 미만 → "
                   f"PaddleOCR-VL 로컬 로딩 생략(graceful 빈 결과). "
-                  f"OCR_BACKEND=vision 또는 더 큰 메모리/PADDLE_OCR_VL_SERVER_URL 사용.")
+                  f"OCR_BACKEND=vision 또는 더 큰 메모리 사용.")
             _PADDLE_VL = None
             return None
-        _PADDLE_VL = PaddleOCRVL(**kwargs)
+        _PADDLE_VL = PaddleOCRVL()
     except Exception as e:  # noqa: BLE001 — URLError(가중치 호스트 차단) 등 포함
         print(f"[extract_ocr] PaddleOCRVL 초기화 실패(가중치 차단/미설치 추정) "
               f"→ graceful 빈 결과: {type(e).__name__}: {e}")
@@ -368,6 +369,11 @@ def extract_ocr(pdf_bytes: bytes, pages: "list[int] | None" = None) -> "list[Blo
         # 알 수 없는 백엔드 → 개발 폴백으로
         backend = _ocr_vision
 
+    # 폴백 백엔드(1차가 빈 결과/실패일 때 재시도). 1차와 동일하거나 미설정이면 폴백 없음.
+    fallback = _BACKENDS.get(OCR_FALLBACK_BACKEND) if OCR_FALLBACK_BACKEND else None
+    if fallback is backend:
+        fallback = None
+
     rendered = _render_pages(pdf_bytes, pages)
     if not rendered:
         return []
@@ -378,8 +384,17 @@ def extract_ocr(pdf_bytes: bytes, pages: "list[int] | None" = None) -> "list[Blo
         try:
             lines = backend(b64)
         except Exception:
-            # 백엔드 자체 예외(가중치 차단 등) → 해당 페이지 graceful skip
-            continue
+            # 백엔드 자체 예외(가중치 차단 등) → 빈 결과로 두고 아래 폴백에 맡김
+            lines = []
+        if not lines and fallback is not None:
+            # 1차 백엔드가 빈 결과/실패 → 폴백(gpt-5.5 비전)으로 재시도.
+            try:
+                lines = fallback(b64)
+            except Exception:
+                lines = []
+            if lines:
+                print(f"[extract_ocr] p{page_no}: {OCR_BACKEND} 빈 결과 → "
+                      f"{OCR_FALLBACK_BACKEND} 폴백 사용({len(lines)}줄)")
         for item in lines:
             btype, text, conf, bbox = _normalize_line(item)
             if not text:
@@ -458,6 +473,60 @@ def test_paddleocr_vl_graceful_when_weights_blocked():
         assert mod._ocr_paddleocr_vl("ignored") == []
     finally:
         mod._PADDLE_VL = prev
+
+
+def test_fallback_used_when_primary_empty():
+    # 1차 백엔드가 빈 결과면 폴백(vision)이 이어받는지 검증(외부 호출 없이 monkeypatch).
+    import app.pdf.extract_ocr as mod
+
+    prev_backend, prev_fb = mod.OCR_BACKEND, mod.OCR_FALLBACK_BACKEND
+    orig_paddle = mod._BACKENDS["paddleocr_vl"]
+    orig_vision = mod._BACKENDS["vision"]
+    orig_render = mod._render_pages
+    mod.OCR_BACKEND, mod.OCR_FALLBACK_BACKEND = "paddleocr_vl", "vision"
+    mod._BACKENDS["paddleocr_vl"] = lambda b64: []                       # 1차: 가중치 차단 흉내
+    mod._BACKENDS["vision"] = lambda b64: [("para", "폴백 줄", None, None)]  # 폴백: gpt-5.5 비전
+    mod._render_pages = lambda data, pages: [(1, "fakeb64")]
+    try:
+        blocks = mod.extract_ocr(b"whatever")
+    finally:
+        mod.OCR_BACKEND, mod.OCR_FALLBACK_BACKEND = prev_backend, prev_fb
+        mod._BACKENDS["paddleocr_vl"] = orig_paddle
+        mod._BACKENDS["vision"] = orig_vision
+        mod._render_pages = orig_render
+
+    assert len(blocks) == 1
+    assert blocks[0].text == "폴백 줄" and blocks[0].source == "ocr"
+
+
+def test_no_fallback_when_primary_has_result():
+    # 1차가 결과를 내면 폴백은 호출되지 않아야 한다.
+    import app.pdf.extract_ocr as mod
+
+    called = {"fb": False}
+    prev_backend, prev_fb = mod.OCR_BACKEND, mod.OCR_FALLBACK_BACKEND
+    orig_paddle = mod._BACKENDS["paddleocr_vl"]
+    orig_vision = mod._BACKENDS["vision"]
+    orig_render = mod._render_pages
+
+    def _fb(b64):
+        called["fb"] = True
+        return [("para", "안 불려야 함", None, None)]
+
+    mod.OCR_BACKEND, mod.OCR_FALLBACK_BACKEND = "paddleocr_vl", "vision"
+    mod._BACKENDS["paddleocr_vl"] = lambda b64: [("para", "1차 줄", None, None)]
+    mod._BACKENDS["vision"] = _fb
+    mod._render_pages = lambda data, pages: [(1, "fakeb64")]
+    try:
+        blocks = mod.extract_ocr(b"whatever")
+    finally:
+        mod.OCR_BACKEND, mod.OCR_FALLBACK_BACKEND = prev_backend, prev_fb
+        mod._BACKENDS["paddleocr_vl"] = orig_paddle
+        mod._BACKENDS["vision"] = orig_vision
+        mod._render_pages = orig_render
+
+    assert [b.text for b in blocks] == ["1차 줄"]
+    assert called["fb"] is False
 
 
 def test_block_format_matches_contract():
