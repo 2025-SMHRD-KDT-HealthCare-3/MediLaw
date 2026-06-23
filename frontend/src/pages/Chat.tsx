@@ -1,29 +1,41 @@
 ﻿import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import ChatMessage from '../components/chat/ChatMessage'
 import { useChatStore } from '../store/chatStore'
-import type { ChatMessage as ChatMessageType } from '../types/chat'
+import type { ChatMessage as ChatMessageType, Citation, CitationStatus } from '../types/chat'
 import { createRoom, askAi } from '../api/chat'
+
+// 백엔드 검증상태 → 우리 CitationStatus 매핑 (문서 §11)
+const STATUS_MAP: Record<string, CitationStatus> = {
+  CONFIRMED: 'verified',
+  WARNING: 'caution',
+  ERROR: 'error',
+}
 
 export default function Chat() {
   const { messages, addMessage } = useChatStore()
   const [input, setInput] = useState('')
   const [roomId, setRoomId] = useState<number | string | null>(null)
   const [loading, setLoading] = useState(false)
+  const navigate = useNavigate()
 
   // 화면 진입 시 방 하나 생성
   useEffect(() => {
     const init = async () => {
       try {
         const res = await createRoom('의료법 상담')
-        console.log('createRoom 응답:', res)
-        const id = res.data?.room_id ?? res.data?.room?.room_id ?? res.data?.id
-        setRoomId(id)
-      } catch (err) {
+        setRoomId(res.data?.room_id ?? null)
+      } catch (err: any) {
+        // 로그인 안 된 상태면 로그인 화면으로 (문서 §5)
+        if (err.response?.status === 401) {
+          navigate('/login')
+          return
+        }
         console.error('createRoom 에러:', err)
       }
     }
     init()
-  }, [])
+  }, [navigate])
 
   const handleSend = async () => {
     if (!input.trim() || loading) return
@@ -33,7 +45,6 @@ export default function Chat() {
     }
 
     const question = input
-    // 1) 내 질문 즉시 표시
     addMessage({
       id: Date.now().toString(),
       role: 'user',
@@ -44,19 +55,42 @@ export default function Chat() {
     setLoading(true)
 
     try {
-      // 2) AI 답변 요청
       const res = await askAi(roomId, question)
-      console.log('ai-answer 응답:', JSON.stringify(res.data, null, 2))
-      const answer = res.data?.answer_chat
+      const data = res.data
+      const answer = data?.answer_chat
+      const evidences = data?.evidences ?? []
+      const verifications = data?.verifications ?? []
+
+      // 근거(evidences) → Citation 매핑 (문서 §11)
+      const citations: Citation[] = evidences.map((ev: any) => ({
+        id: String(ev.evidence_id),
+        lawName: ev.article_no ? `${ev.law_name} ${ev.article_no}` : ev.law_name,
+        clause: (ev.core_basis ?? '')
+          .replace(/^#.*$/gm, '')
+          .replace(/\n{2,}/g, '\n')
+          .trim(),
+        status: 'verified',
+        sourceUrl: ev.source_url ?? undefined,
+      }))
+
+      // 검증(verifications) → 신뢰점수 + 상태 (문서 §11)
+      const firstV = verifications[0]
+      const trustScore = firstV?.confidence_score
+      if (firstV?.verify_status && STATUS_MAP[firstV.verify_status] && citations[0]) {
+        citations[0].status = STATUS_MAP[firstV.verify_status]
+      }
+
       const aiMessage: ChatMessageType = {
         id: String(answer?.chat_id ?? Date.now()),
         role: 'assistant',
         content: answer?.chat_text ?? '(답변 내용 없음)',
-        timestamp: new Date().toISOString(),
-        // citations / trustScore 는 응답 모양 확인 후 다음 단계에서 매핑
+        timestamp: answer?.chatted_at ?? new Date().toISOString(),
+        citations: citations.length > 0 ? citations : undefined,
+        trustScore,
       }
       addMessage(aiMessage)
     } catch (err: any) {
+      // AI 실패(502 등) 처리 (문서 §9)
       console.error('ai-answer 에러:', err)
       addMessage({
         id: Date.now().toString(),
@@ -78,12 +112,15 @@ export default function Chat() {
 
       <main className="flex-1 overflow-y-auto px-6 py-6">
         <div className="mx-auto max-w-3xl space-y-4">
+          {messages.length === 0 && !loading && (
+            <p className="text-center text-sm text-slate-400 mt-10">
+              의료법 관련 질문을 입력해 상담을 시작하세요.
+            </p>
+          )}
           {messages.map((msg) => (
             <ChatMessage key={msg.id} message={msg} />
           ))}
-          {loading && (
-            <p className="text-sm text-slate-400">답변 생성 중…</p>
-          )}
+          {loading && <p className="text-sm text-slate-400">답변 생성 중…</p>}
         </div>
       </main>
 

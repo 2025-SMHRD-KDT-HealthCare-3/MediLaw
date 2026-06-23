@@ -1,12 +1,14 @@
 ﻿import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { login } from '../api/auth'
+import { useAuthStore } from '../store/authStore'
 
 export default function Login() {
   const [loginId, setLoginId] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const navigate = useNavigate()
+  const setLoggedIn = useAuthStore((s) => s.login)
 
   const handleLogin = async () => {
     setError('')
@@ -17,7 +19,8 @@ export default function Login() {
     try {
       const result = await login({ login_id: loginId, password })
       console.log('login result:', result)
-      navigate('/chat') // 로그인 성공 → 챗봇으로
+      setLoggedIn()
+      navigate('/chat')
     } catch (err: any) {
       setError(err.response?.data?.message ?? '로그인에 실패했습니다.')
       console.error('login error:', err)
@@ -61,12 +64,12 @@ export default function Login() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                placeholder="••••••••"
+                placeholder="비밀번호를 입력하세요"
                 className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-aqua focus:border-transparent"
               />
             </div>
 
-            {error && <p className="text-sm text-error">{error}</p>}
+            {error ? <p className="text-sm text-error">{error}</p> : null}
 
             <button
               onClick={handleLogin}
