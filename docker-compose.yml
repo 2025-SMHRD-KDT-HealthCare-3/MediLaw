@@ -29,6 +29,11 @@ services:
       # 챗봇 RAG 답변 시 product 가 호출하는 rag 서버 주소(컨테이너 서비스명).
       # rag profile 을 안 켜도 무해(챗봇 호출 때만 사용). rag 를 켜면 바로 연동됨.
       HMS_URL: http://rag:8000
+    # 개발/테스트 편의: 앱 코드 바인드마운트 + uvicorn --reload → 백엔드 편집 시 재빌드 없이 자동반영.
+    # (이미지 CMD 는 그대로 두고 compose 에서만 override — 운영용 compose 에선 이 줄을 빼면 됨)
+    command: ["sh", "-c", "python -m app.seed; uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir /app/app"]
+    volumes:
+      - ./backend/app:/app/app
     restart: on-failure
     healthcheck:
       # slim 에 curl 이 없어 python urllib 로 점검. server-check 는 DB 없이도 응답.
@@ -84,5 +89,8 @@ services:
       # rag(챗봇/검색)를 실제로 켜려면 backend/fastapi/.env 에 OPENAI_API_KEY 를 채워야 함.
       - path: ./backend/fastapi/.env
         required: false
+    volumes:
+      # 검색 DB(1GB)는 이미지에 굽지 않고 런타임 마운트 — 빌드 빠르고, db 교체해도 재빌드 불필요.
+      - ./backend/fastapi/data:/app/data
     ports:
       - "8000:8000"
