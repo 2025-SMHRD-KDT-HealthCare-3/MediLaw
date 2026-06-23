@@ -18,3 +18,15 @@ export async function getChats(roomId: number | string) {
   const res = await api.get(`/rooms/${roomId}/chats`);
   return res.data;
 }
+
+// 내 상담방 목록 조회
+export async function getRooms() {
+  const res = await api.get('/rooms?skip=0&limit=100');
+  return res.data;
+}
+
+// 광고문구 검토 이력 조회
+export async function getAdReviews() {
+  const res = await api.get('/ai-ad-copies');
+  return res.data;
+}

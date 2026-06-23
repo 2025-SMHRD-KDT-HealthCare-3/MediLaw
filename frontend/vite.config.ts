@@ -8,10 +8,12 @@ export default defineConfig({
     tailwindcss(),
   ],
   server: {
+    host: true,
     proxy: {
       '/api': {
-        target: 'http://192.168.219.54:4000', // 백엔드 주소. IP 바뀌면 이 줄만 교체
+        target: 'http://192.168.219.52:4000', // 백엔드 주소. IP 바뀌면 이 줄만 교체
         changeOrigin: true,
+        secure: false,
       },
     },
   },
