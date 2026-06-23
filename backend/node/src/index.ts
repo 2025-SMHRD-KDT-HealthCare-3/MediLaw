@@ -14,11 +14,17 @@ const FASTAPI_TARGET = process.env.FASTAPI_TARGET ?? 'http://127.0.0.1:8000'
 const PRODUCT_API_TARGET = process.env.PRODUCT_API_TARGET ?? 'http://127.0.0.1:8001'
 const HMS_API_KEY = process.env.HMS_API_KEY ?? ''
 const PROD = process.env.NODE_ENV === 'production'
-const ACCESS_TOKEN_EXPIRE_MINUTES = Number(process.env.ACCESS_TOKEN_EXPIRE_MINUTES ?? '30')
-const SESSION_MAX_AGE_MS =
-  Number.isFinite(ACCESS_TOKEN_EXPIRE_MINUTES) && ACCESS_TOKEN_EXPIRE_MINUTES > 0
-    ? ACCESS_TOKEN_EXPIRE_MINUTES * 60_000
-    : 30 * 60_000
+
+const positiveNumberEnv = (name: string, fallback: number) => {
+  const value = Number(process.env[name] ?? fallback)
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+const ACCESS_TOKEN_EXPIRE_MINUTES = positiveNumberEnv('ACCESS_TOKEN_EXPIRE_MINUTES', 30)
+const SESSION_COOKIE_MAX_AGE_MS = ACCESS_TOKEN_EXPIRE_MINUTES * 60_000
+const LOGIN_TIMEOUT_MS = positiveNumberEnv('LOGIN_TIMEOUT_MS', 15_000)
+const PRODUCT_PROXY_TIMEOUT_MS = positiveNumberEnv('PRODUCT_PROXY_TIMEOUT_MS', 190_000)
+const RAG_PROXY_TIMEOUT_MS = positiveNumberEnv('RAG_PROXY_TIMEOUT_MS', 190_000)
 
 const successPayload = (data: any = null, message = 'success') => ({
   success: true,
@@ -33,14 +39,20 @@ const errorPayload = (message: string, code?: string, data: any = null) => ({
   data,
 })
 
+const upstreamErrorCode = (err: any) => {
+  if (err?.name === 'AbortError' || err?.name === 'TimeoutError') return 'TIMEOUT'
+  return err?.code ?? err?.cause?.code ?? 'ERROR'
+}
+
 const proxyErrorHandler = (err: any, req: any, res: any) => {
-  console.error('[proxy-error]', err?.code, req?.url)
+  const errorCode = upstreamErrorCode(err)
+  console.error('[proxy-error]', errorCode, req?.url)
   if (res?.headersSent) return
 
-  const statusCode = err?.code === 'ECONNREFUSED' ? 503 : 504
+  const statusCode = errorCode === 'ECONNREFUSED' ? 503 : 504
   const payload = errorPayload(
     '백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.',
-    `UPSTREAM_${err?.code ?? 'ERROR'}`,
+    `UPSTREAM_${errorCode}`,
   )
 
   if (typeof res?.status === 'function' && typeof res?.json === 'function') {
@@ -69,6 +81,12 @@ app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'medilaw-node-bridge',
+    session_cookie_max_age_minutes: SESSION_COOKIE_MAX_AGE_MS / 60_000,
+    timeouts_ms: {
+      login: LOGIN_TIMEOUT_MS,
+      product: PRODUCT_PROXY_TIMEOUT_MS,
+      rag: RAG_PROXY_TIMEOUT_MS,
+    },
     targets: {
       rag: FASTAPI_TARGET,
       product: PRODUCT_API_TARGET,
@@ -89,6 +107,7 @@ app.post('/api/auth/login', authLoginLimiter, express.json(), async (req, res) =
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(LOGIN_TIMEOUT_MS),
     })
     const data: any = await upstream.json().catch(() => ({}))
     const token = data?.data?.access_token ?? data?.access_token
@@ -98,7 +117,7 @@ app.post('/api/auth/login', authLoginLimiter, express.json(), async (req, res) =
         httpOnly: true,
         secure: PROD,
         sameSite: 'lax',
-        maxAge: SESSION_MAX_AGE_MS,
+        maxAge: SESSION_COOKIE_MAX_AGE_MS,
         path: '/',
       })
 
@@ -108,12 +127,12 @@ app.post('/api/auth/login', authLoginLimiter, express.json(), async (req, res) =
 
     res.status(upstream.status).json(data)
   } catch (err: any) {
-    const errorCode = err?.code ?? err?.cause?.code
+    const errorCode = upstreamErrorCode(err)
     console.error('[auth-login-error]', errorCode, err?.message)
     res.status(errorCode === 'ECONNREFUSED' ? 503 : 504).json({
       ...errorPayload(
-        '백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.',
-        `UPSTREAM_${errorCode ?? 'ERROR'}`,
+        '로그인 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도하세요.',
+        `UPSTREAM_${errorCode}`,
       ),
     })
   }
@@ -149,7 +168,7 @@ app.use('/api/rag', (req, res, next) => {
   if (['/chat', '/chat/stream', '/chat/checklist'].includes(req.path)) {
     res.status(409).json(
       errorPayload(
-        '챗봇 대화는 저장을 위해 제품 API를 사용해야 합니다.',
+        '챗봇 요청은 저장을 위해 product API를 통해 호출해야 합니다.',
         'RAG_DIRECT_CHAT_BLOCKED',
         { expected_path: '/api/rooms/{room_id}/ai-answer' },
       ),
@@ -165,8 +184,8 @@ app.use(
     target: FASTAPI_TARGET,
     changeOrigin: true,
     ws: true,
-    proxyTimeout: 0,
-    timeout: 0,
+    proxyTimeout: RAG_PROXY_TIMEOUT_MS,
+    timeout: RAG_PROXY_TIMEOUT_MS,
     logger: console,
     on: {
       proxyReq: (proxyReq: any) => {
@@ -183,8 +202,8 @@ app.use(
     target: PRODUCT_API_TARGET,
     changeOrigin: true,
     ws: true,
-    proxyTimeout: 0,
-    timeout: 0,
+    proxyTimeout: PRODUCT_PROXY_TIMEOUT_MS,
+    timeout: PRODUCT_PROXY_TIMEOUT_MS,
     pathRewrite: (path) => `/api${path}`,
     logger: console,
     on: {
@@ -206,7 +225,7 @@ app.use(
 )
 
 app.use((_req, res) => {
-  res.status(404).json(errorPayload('경로 없음', 'NOT_FOUND'))
+  res.status(404).json(errorPayload('경로를 찾을 수 없습니다.', 'NOT_FOUND'))
 })
 
 app.use((err: any, _req: any, res: any, _next: any) => {
