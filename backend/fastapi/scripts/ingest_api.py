@@ -184,7 +184,10 @@ def ingest_laws(conn):
 
 # ===================== 판례(prec) =====================
 def search_prec(query: str, max_n: int):
-    """판례 목록 검색 → 판례일련번호 리스트."""
+    """판례 목록 검색 → 판례정보일련번호 리스트.
+    dedup 키(저장되는 seq_no=판례정보일련번호)와 동일 필드를 ID로 채택해야
+    재실행 시 사전 스킵(pid in seqs)이 동작한다. 따라서 검색단계도
+    판례정보일련번호를 우선 사용(없을 때만 판례일련번호로 폴백)."""
     ids, page = [], 1
     while len(ids) < max_n:
         d = call("lawSearch.do", target="prec", query=query, display=100, page=page)
@@ -192,7 +195,7 @@ def search_prec(query: str, max_n: int):
         if not items:
             break
         for it in items:
-            sid = it.get("판례일련번호") or it.get("판례정보일련번호")
+            sid = it.get("판례정보일련번호") or it.get("판례일련번호")
             if sid:
                 ids.append(str(sid))
         page += 1
@@ -203,7 +206,9 @@ def search_prec(query: str, max_n: int):
 
 
 def fetch_prec(prec_id: str):
-    """판례 본문 조회 → cases 행 dict. 응답 필드명은 환경에서 1회 검증 권장."""
+    """판례 본문 조회 → cases 행 dict. prec_id=판례정보일련번호(검색·dedup과 동일 필드).
+    seq_no는 상세응답의 판례정보일련번호(없으면 prec_id)로 저장 → 검색·상세·dedup 정합.
+    응답 필드명은 환경에서 1회 검증 권장."""
     d = call("lawService.do", target="prec", ID=prec_id)
     p = d.get("PrecService") or d.get("판례") or {}
     if not isinstance(p, dict) or not p:

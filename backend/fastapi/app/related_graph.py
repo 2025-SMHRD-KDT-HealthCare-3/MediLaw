@@ -214,8 +214,13 @@ def _clean_sanctions(raw) -> list[str]:
     return out
 
 
-def _firewall_issue(raw: dict, hits) -> GraphIssue | None:
-    """LLM이 만든 issue 한 개를 검증 — 유효 idx만 실제 Hit으로 복원. 환각 idx는 버림."""
+def _firewall_issue(raw: dict, hits, used_case_ids: set[int] | None = None) -> GraphIssue | None:
+    """LLM이 만든 issue 한 개를 검증 — 유효 idx만 실제 Hit으로 복원. 환각 idx는 버림.
+
+    used_case_ids(전역 set)가 주어지면 이미 다른 issue에 배정된 case idx는 제외하고,
+    이 issue가 새로 가져간 case idx는 거기에 등록한다(issue 간 판례 노드 중복 방지).
+    statute는 dedup하지 않음(여러 쟁점이 같은 조문을 참조하는 건 정상).
+    """
     if not isinstance(raw, dict):
         return None
     label = str(raw.get("label") or "").strip()
@@ -228,7 +233,7 @@ def _firewall_issue(raw: dict, hits) -> GraphIssue | None:
     if isinstance(sref, int) and 0 <= sref < len(hits) and hits[sref].source_type == "statute":
         statute = hits[sref].label
 
-    # case_refs: 유효하고 실제로 case 인 후보만. 중복 제거.
+    # case_refs: 유효하고 실제로 case 인 후보만. issue 내부 + (있으면)issue 간 중복 제거.
     cases: list[GraphCase] = []
     seen: set[int] = set()
     refs = raw.get("case_refs")
@@ -236,10 +241,14 @@ def _firewall_issue(raw: dict, hits) -> GraphIssue | None:
         for r in refs:
             if not isinstance(r, int) or r in seen or not (0 <= r < len(hits)):
                 continue
+            if used_case_ids is not None and r in used_case_ids:
+                continue  # 이미 다른 issue에 배정된 판례 → 건너뜀
             if hits[r].source_type != "case":
                 continue
             seen.add(r)
             cases.append(_case_node(hits[r]))
+    if used_case_ids is not None:
+        used_case_ids |= seen  # 이 issue가 가져간 case idx 전역 등록
 
     if not cases and not statute:
         return None  # 근거가 하나도 안 남으면 노드 자체를 만들지 않음
@@ -265,8 +274,9 @@ def _structure_with_llm(text: str, hits, lang: str) -> list[GraphIssue]:
     if not isinstance(issues_raw, list):
         return []
     issues: list[GraphIssue] = []
+    used_case_ids: set[int] = set()  # issue 간 전역 dedup — 같은 판례가 여러 issue에 중복 출현 방지
     for raw in issues_raw[:_MAX_ISSUES]:
-        issue = _firewall_issue(raw, hits)
+        issue = _firewall_issue(raw, hits, used_case_ids)
         if issue:
             issues.append(issue)
     return issues

@@ -8,7 +8,7 @@ route_pages → 페이지별 extract_digital / extract_ocr → Document.blocks
 from typing import Optional
 
 from app.pdf import classify, extract_digital, extract_ocr, review, revise, routing, segment
-from app.pdf.schema import Document
+from app.pdf.schema import Document, PageRoute
 
 
 def process_pdf(
@@ -19,10 +19,16 @@ def process_pdf(
     top_k: int = 4,
     pages: Optional[list[int]] = None,   # 특정 페이지(1-based)만 — 대용량/비용 통제
     ocr: bool = True,
+    route_hint: Optional[list[PageRoute]] = None,  # 미리 구한 라우팅(재파싱 생략용)
 ) -> dict:
-    """PDF → 위험검토 결과. {document, routes, segments, revisions}."""
-    # A. 페이지 라우팅
-    routes = routing.route_pages(pdf_bytes)
+    """PDF → 위험검토 결과. {document, routes, segments, revisions}.
+
+    route_hint: 호출자가 이미 routing.route_pages 로 구한 PageRoute 목록을 넘기면
+        route_pages 재호출(=PDF 전체 재파싱)을 건너뛴다. SSE처럼 페이지별로 반복
+        호출할 때 O(N²) 재파싱을 막는 용도. 미지정이면 기존과 100% 동일하게 직접 라우팅.
+    """
+    # A. 페이지 라우팅 — route_hint 주어지면 재파싱 생략(하위호환: 미지정 시 기존 동작).
+    routes = route_hint if route_hint is not None else routing.route_pages(pdf_bytes)
     if pages is not None:
         routes = [r for r in routes if r.page in pages]
     digital_pages = [r.page for r in routes if r.route == "digital"]

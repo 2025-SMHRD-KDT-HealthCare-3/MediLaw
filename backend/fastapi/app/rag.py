@@ -3,7 +3,7 @@
 임베딩/키가 없으면 자동으로 FTS 전용으로 동작(graceful degradation).
 - statute 히트: 조문(article) 단위 (clause-level retrieval)
 - case 히트: 판례 단위
-- interpretation(해석례): DB 미적재 — 스키마/코드는 지원, 결과는 현재 비어있음
+- interpretation(해석례)·decision(결정문)·guideline(가이드라인): documents 테이블에 적재되어 검색됨
 """
 import re
 from functools import lru_cache

@@ -237,7 +237,9 @@ def chat_stream(req: ChatRequest):
             yield _sse({"type": "error", "message": str(e)})
             return
         if decision["needs_clarification"]:  # Tier 2 모호 → 되묻기 한 줄 추가 토큰
-            yield _sse({"type": "token", "text": _CLARIFY_EN if lang == "en" else _CLARIFY})
+            clarify = _CLARIFY_EN if lang == "en" else _CLARIFY
+            yield _sse({"type": "token", "text": clarify})
+            parts.append(clarify)  # done의 answer_segments/citation_check에도 포함
         answer = "".join(parts)
         yield _sse({"type": "done", "citation_check": _citation_check(answer, req.as_of).model_dump(),
                     "answer_segments": [s.model_dump() for s in segment_answer(answer, sources)]})
