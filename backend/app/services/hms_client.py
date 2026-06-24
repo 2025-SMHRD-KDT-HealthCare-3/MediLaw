@@ -27,6 +27,23 @@ def _headers(extra: dict[str, str] | None = None) -> dict[str, str]:
     return headers
 
 
+def _hms_error(exc: httpx.HTTPError) -> HTTPException:
+    if isinstance(exc, httpx.TimeoutException):
+        return HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="HMS server response timed out",
+        )
+    if isinstance(exc, httpx.ConnectError):
+        return HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="HMS server is unavailable",
+        )
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail="HMS request failed",
+    )
+
+
 def post_json(path: str, payload: dict[str, Any], *, timeout: int = DEFAULT_TIMEOUT) -> dict:
     try:
         response = httpx.post(_url(path), json=payload, timeout=timeout, headers=_headers())
@@ -34,10 +51,7 @@ def post_json(path: str, payload: dict[str, Any], *, timeout: int = DEFAULT_TIME
         data = response.json()
     except httpx.HTTPError as exc:
         logger.exception("HMS JSON request failed path=%s", path)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"HMS request failed: {exc}",
-        ) from exc
+        raise _hms_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -65,10 +79,7 @@ def post_multipart(
         payload = response.json()
     except httpx.HTTPError as exc:
         logger.exception("HMS multipart request failed path=%s", path)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"HMS request failed: {exc}",
-        ) from exc
+        raise _hms_error(exc) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
