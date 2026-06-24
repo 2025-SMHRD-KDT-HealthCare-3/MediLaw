@@ -55,6 +55,9 @@ def _sse(obj: dict) -> str:
 def _page_findings(segments) -> list[dict]:
     """그 페이지 세그먼트 중 위험한 것 → ReviewFinding 형태 dict 목록."""
     out = []
+    # segment_index 는 enumerate(segments) 의 페이지-로컬 0-based 인덱스.
+    # page 이벤트가 같은 페이지의 segments 원문 배열을 함께 내보내므로(self-contained),
+    # 프론트는 event.segments[finding.segment_index] 로 원문을 역참조할 수 있다.
     for i, s in enumerate(segments):
         r = s.risk
         if r and r.level in ("low", "med", "high"):
@@ -102,6 +105,9 @@ def _stream_gen(pdf_bytes: bytes, as_of, top_k: int, pages: "list[int] | None" =
                     "type": "page", "page": r.page, "route": r.route,
                     "progress": f"{n}/{total}", "doc_type": res["document"].doc_type,
                     "original_text": before, "revised_text": after, "findings": findings,
+                    # 이 페이지의 세그먼트 원문 배열. findings[].segment_index(페이지-로컬)가
+                    # 이 배열 인덱스와 일치 → 프론트가 segment_index 로 원문 역참조 가능.
+                    "segments": [s.text for s in segs],
                 }
                 # scan 페이지인데 추출 텍스트가 비면 OCR 실패 — "위험 없음"과 구별되게 경고.
                 if r.route == "scan" and not before.strip():
