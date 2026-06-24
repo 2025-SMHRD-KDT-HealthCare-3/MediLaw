@@ -1,0 +1,172 @@
+import { useState } from 'react'
+import { reviewAdCopy } from '../api/chat'
+
+interface Citation {
+  n: number
+  label: string
+  snippet?: string
+  source_url?: string
+  trust_grade?: string
+}
+interface ChecklistItem {
+  id: string
+  title: string
+  reason?: string
+  status?: string
+  citations?: Citation[]
+}
+interface ParsedResult {
+  inputText: string
+  revision?: string
+  checklist: ChecklistItem[]
+  summary?: { total: number; todo: number; ok: number; risk: number; na: number }
+}
+
+const ITEM_STYLE: Record<string, { label: string; color: string }> = {
+  todo: { label: '확인 필요', color: '#E8A33D' },
+  risk: { label: '위반 소지', color: '#D9534F' },
+  ok: { label: '문제 없음', color: '#13AAA0' },
+  na: { label: '해당 없음', color: '#6B7280' },
+}
+
+export default function AdReview() {
+  const [text, setText] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<ParsedResult | null>(null)
+  const [error, setError] = useState('')
+
+  const handleReview = async () => {
+    if (!text.trim() || loading) return
+    setError('')
+    setResult(null)
+    setLoading(true)
+    try {
+      const res = await reviewAdCopy(text)
+      const data = res.data ?? res
+
+      // legal_basis는 문자열로 옴 → 한 번 더 파싱
+      let legal: any = {}
+      try {
+        legal = typeof data.legal_basis === 'string'
+          ? JSON.parse(data.legal_basis)
+          : (data.legal_basis ?? {})
+      } catch {
+        legal = {}
+      }
+
+      setResult({
+        inputText: data.input_text ?? text,
+        revision: data.revision_recomm ?? data.alternative_text,
+        checklist: legal.checklist ?? [],
+        summary: legal.checklist_summary,
+      })
+    } catch (err: any) {
+      console.error('광고검토 에러:', err)
+      setError(err.response?.data?.message ?? err.message ?? '검토에 실패했습니다.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-[#F7F8FA] p-8">
+      <div className="mx-auto max-w-2xl">
+        <h1 className="text-2xl font-bold text-navy mb-1">광고문구 검토</h1>
+        <p className="text-sm text-slate-500 mb-6">
+          의료광고 문구를 입력하면 법령 위반 소지를 검토해드립니다.
+        </p>
+
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder='예: "100% 안전한 시술, 부작용 전혀 없음"'
+          rows={4}
+          disabled={loading}
+          className="w-full rounded-lg border border-gray-300 p-4 text-sm focus:border-aqua focus:outline-none disabled:bg-gray-100"
+        />
+
+        <button
+          onClick={handleReview}
+          disabled={loading}
+          className="mt-3 rounded-lg bg-navy px-6 py-2.5 text-sm font-medium text-white hover:bg-navy/90 disabled:opacity-50"
+        >
+          {loading ? '검토 중…' : '검토 요청'}
+        </button>
+
+        {error && <p className="mt-4 text-sm text-error">{error}</p>}
+
+        {result && (
+          <div className="mt-6 space-y-4">
+            {/* 요약 */}
+            {result.summary && (
+              <div className="flex gap-2 text-xs">
+                <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">
+                  확인 필요 {result.summary.todo}
+                </span>
+                <span className="rounded-full bg-red-50 px-3 py-1 text-red-700">
+                  위반 소지 {result.summary.risk}
+                </span>
+                <span className="rounded-full bg-teal-50 px-3 py-1 text-teal-700">
+                  문제 없음 {result.summary.ok}
+                </span>
+              </div>
+            )}
+
+            {/* 검토 항목들 */}
+            {result.checklist.length === 0 ? (
+              <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-slate-500">
+                검토 항목이 없습니다.
+              </div>
+            ) : (
+              result.checklist.map((item) => {
+                const s = ITEM_STYLE[item.status ?? ''] ?? ITEM_STYLE.na
+                return (
+                  <div key={item.id} className="rounded-xl border border-gray-200 bg-white p-6">
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <p className="text-sm font-semibold text-navy">{item.title}</p>
+                      <span
+                        className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
+                        style={{ color: s.color, backgroundColor: `${s.color}1A` }}
+                      >
+                        ● {s.label}
+                      </span>
+                    </div>
+                    {item.reason && (
+                      <p className="text-sm text-slate-600">{item.reason}</p>
+                    )}
+                    {item.citations && item.citations.length > 0 && (
+                      <div className="mt-3 border-t border-gray-100 pt-3">
+                        <p className="mb-1 text-xs font-medium text-slate-400">근거 법령</p>
+                        <ul className="space-y-1">
+                          {item.citations.map((c) => (
+                            <li key={c.n} className="text-xs text-slate-600">
+                              [{c.n}]{' '}
+                              {c.source_url ? (
+                                <a href={c.source_url} target="_blank" rel="noreferrer"
+                                   className="text-brand-blue hover:underline">
+                                  {c.label}
+                                </a>
+                              ) : c.label}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+
+            {/* 수정 추천 */}
+            {result.revision && result.revision !== result.inputText && (
+              <div className="rounded-xl border border-aqua bg-cyan-50 p-6">
+                <p className="mb-1 text-xs font-medium text-slate-500">수정 추천 문구</p>
+                <p className="text-sm font-medium text-navy">{result.revision}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

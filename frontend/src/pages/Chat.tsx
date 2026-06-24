@@ -76,8 +76,8 @@ export default function Chat() {
       // 검증(verifications) → 신뢰점수 + 상태 (문서 §11)
       const firstV = verifications[0]
       const trustScore = firstV?.confidence_score
-      if (firstV?.verify_status && STATUS_MAP[firstV.verify_status] && citations[0]) {
-        citations[0].status = STATUS_MAP[firstV.verify_status]
+      if (firstV?.verification_status && STATUS_MAP[firstV.verification_status] && citations[0]) {
+        citations[0].status = STATUS_MAP[firstV.verification_status]
       }
 
       const aiMessage: ChatMessageType = {

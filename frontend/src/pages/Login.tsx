@@ -1,6 +1,6 @@
 ﻿import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { login, signup } from '../api/auth'
+import { login } from '../api/auth'
 import { useAuthStore } from '../store/authStore'
 
 export default function Login() {
@@ -27,21 +27,7 @@ export default function Login() {
     }
   }
 
-  // 임시 — 계정 만들기 (확인되면 이 함수랑 아래 점선 버튼 삭제)
-  const handleSignupTest = async () => {
-    try {
-      const result = await signup({
-        login_id: 'jongho1',
-        password: 'test1234',
-        name: '이종호',
-        email: 'jongho1@test.com',
-        phone_number: '01000000000',
-      })
-      alert('회원가입 성공!\n' + JSON.stringify(result))
-    } catch (err: any) {
-      alert('회원가입 실패: ' + (err.response?.data?.message ?? err.message))
-    }
-  }
+  
 
   return (
     <div className="min-h-screen flex">
@@ -94,12 +80,7 @@ export default function Login() {
               로그인
             </button>
 
-            <button
-              onClick={handleSignupTest}
-              className="w-full py-2.5 border border-dashed border-slate-400 text-slate-500 text-sm rounded-lg hover:bg-slate-50"
-            >
-              🧪 회원가입 (임시)
-            </button>
+           
           </div>
 
           <p className="mt-6 text-center text-sm text-slate-500">

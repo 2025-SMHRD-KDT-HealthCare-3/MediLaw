@@ -30,3 +30,9 @@ export async function getAdReviews() {
   const res = await api.get('/ai-ad-copies');
   return res.data;
 }
+
+// 광고문구 검토 요청
+export async function reviewAdCopy(text: string) {
+  const res = await api.post('/ai-ad-copies', { input_text: text });
+  return res.data;
+}
