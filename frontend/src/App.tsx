@@ -7,6 +7,7 @@ import ProtectedRoute from './components/ProtectedRoute'
 import { useAuthStore } from './store/authStore'
 import AdReview from './pages/AdReview'
 import Signup from './pages/Signup'
+import Home from './pages/Home'
 
 function App() {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn)
@@ -21,6 +22,7 @@ function App() {
   return (
     <div>
       <nav className="flex items-center gap-4 p-4 bg-navy text-white">
+        <Link to="/" className="font-bold hover:text-aqua">MediLaw</Link>
         {isLoggedIn ? (
           <>
             <Link to="/chat" className="hover:text-aqua">챗봇</Link>
@@ -32,7 +34,7 @@ function App() {
             </button>
           </>
         ) : (
-          <Link to="/login" className="hover:text-aqua">로그인</Link>
+          <Link to="/login" className="ml-auto hover:text-aqua">로그인</Link>
         )}
       </nav>
 
@@ -43,7 +45,7 @@ function App() {
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/ad-review" element={<ProtectedRoute><AdReview /></ProtectedRoute>} />
         <Route path="/mypage" element={<ProtectedRoute><MyPage /></ProtectedRoute>} />
-        <Route path="/" element={<div className="p-8 text-2xl text-navy">홈 — 위 메뉴를 클릭하세요</div>} />
+        <Route path="/" element={<Home />} />
       </Routes>
     </div>
   )
