@@ -1,9 +1,13 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.models.user import User
 from app.repositories import chat_repository
 from app.schemas.chat_schema import ChatCreate
 from app.services.room_service import ensure_room_access, ensure_room_open
+
+logger = logging.getLogger(__name__)
 
 
 def create_chat(db: Session, room_id: int, current_user: User, data: ChatCreate):
@@ -18,6 +22,7 @@ def create_chat(db: Session, room_id: int, current_user: User, data: ChatCreate)
         db.refresh(chat)
         return chat
     except Exception:
+        logger.exception("chat create failed room_id=%s user_id=%s", room_id, current_user.user_id)
         db.rollback()
         raise
 

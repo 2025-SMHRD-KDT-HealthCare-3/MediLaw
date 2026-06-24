@@ -20,9 +20,16 @@ PORT=4000
 FRONTEND_ORIGIN=http://localhost:5173
 FASTAPI_TARGET=http://127.0.0.1:8000
 PRODUCT_API_TARGET=http://127.0.0.1:8001
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+LOGIN_TIMEOUT_MS=15000
+PRODUCT_PROXY_TIMEOUT_MS=190000
+RAG_PROXY_TIMEOUT_MS=190000
 ```
 
 Do not commit `.env` files.
+
+`ACCESS_TOKEN_EXPIRE_MINUTES` should match the product FastAPI setting. The bridge uses it as the `session` cookie max age.
+Timeout values are milliseconds. Product/RAG defaults allow long AI and PDF review calls while preventing requests from waiting forever.
 
 ## Routing
 

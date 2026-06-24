@@ -1,0 +1,12 @@
+# rag(fastapi) 이미지 빌드 컨텍스트 정리 — 1GB 검색 DB·비밀·캐시를 이미지에 굽지 않는다.
+# 검색 DB(data/*.db)는 compose 의 volumes 로 런타임 마운트해서 쓴다(빌드 빠르고, db 교체 시 재빌드 불필요).
+data/*.db
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.venv/
+venv/
+tests/
+*.Zone.Identifier

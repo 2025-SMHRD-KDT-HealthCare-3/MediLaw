@@ -1,4 +1,5 @@
 import json
+import logging
 
 from sqlalchemy.orm import Session
 
@@ -9,10 +10,12 @@ from app.schemas.summary_schema import SummaryCreate, SummaryUpdate
 from app.services import hms_client
 from app.services.room_service import ensure_room_access
 
+logger = logging.getLogger(__name__)
+
 
 def _room_history_for_hms(db: Session, room_id: int) -> list[dict]:
     history = []
-    for chat in chat_repository.get_list(db, room_id=room_id, limit=100):
+    for chat in chat_repository.get_recent_for_room(db, room_id=room_id, limit=100):
         if not chat.chat_text:
             continue
         if chat.speaker_type == "USER":
@@ -39,6 +42,9 @@ def _generate_checklist(db: Session, room_id: int) -> dict:
 def create_summary(db: Session, room_id: int, current_user: User, data: SummaryCreate):
     """Generate and store a room checklist using HMS chat history."""
     ensure_room_access(db, room_id, current_user)
+    existing = summary_repository.get_unconfirmed_for_room(db, room_id)
+    if existing is not None:
+        return existing
     generated = _generate_checklist(db, room_id)
     payload = data.model_copy(
         update={
@@ -61,6 +67,7 @@ def create_summary(db: Session, room_id: int, current_user: User, data: SummaryC
         db.refresh(summary)
         return summary
     except Exception:
+        logger.exception("summary create failed room_id=%s user_id=%s", room_id, current_user.user_id)
         db.rollback()
         raise
 
@@ -86,6 +93,7 @@ def confirm_summary(db: Session, summary_id: int):
         db.refresh(confirmed)
         return confirmed
     except Exception:
+        logger.exception("summary confirm failed summary_id=%s", summary_id)
         db.rollback()
         raise
 

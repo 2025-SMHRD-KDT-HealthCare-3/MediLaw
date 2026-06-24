@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.models.verification import Verification
@@ -28,6 +28,11 @@ def get_list(
     if ans_id is not None:
         stmt = stmt.where(Verification.ans_id == ans_id)
     return list(db.scalars(stmt.offset(skip).limit(limit)).all())
+
+
+def delete_for_answer(db: Session, ans_id: int) -> None:
+    db.execute(delete(Verification).where(Verification.ans_id == ans_id))
+    db.flush()
 
 
 def update(db: Session, verification: Verification, data: VerificationUpdate) -> Verification:

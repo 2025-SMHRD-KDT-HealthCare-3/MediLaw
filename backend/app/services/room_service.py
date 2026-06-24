@@ -1,9 +1,13 @@
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
 from app.models.user import User
 from app.repositories import room_repository
 from app.schemas.room_schema import RoomCreate, RoomUpdate
+
+logger = logging.getLogger(__name__)
 
 
 def create_room(db: Session, user_id: int, data: RoomCreate):
@@ -15,6 +19,7 @@ def create_room(db: Session, user_id: int, data: RoomCreate):
         db.refresh(room)
         return room
     except Exception:
+        logger.exception("room create failed user_id=%s", user_id)
         db.rollback()
         raise
 
@@ -46,6 +51,40 @@ def list_rooms(db: Session, current_user: User, skip: int = 0, limit: int = 100)
     return room_repository.get_list(db, user_id=user_id, skip=skip, limit=limit)
 
 
+def leave_room(db: Session, room_id: int, current_user: User):
+    """Validate access for a UI leave action without changing persisted room state."""
+    return ensure_room_access(db, room_id, current_user)
+
+
+def close_room(db: Session, room_id: int, current_user: User):
+    """Close a room so existing history remains readable but new chat is blocked."""
+    room = ensure_room_access(db, room_id, current_user)
+    if room.room_status == "CLOSED":
+        return room
+    try:
+        updated = room_repository.update(db, room, RoomUpdate(room_status="CLOSED"))
+        db.commit()
+        db.refresh(updated)
+        return updated
+    except Exception:
+        logger.exception("room close failed room_id=%s user_id=%s", room_id, current_user.user_id)
+        db.rollback()
+        raise
+
+
+def delete_room(db: Session, room_id: int, current_user: User) -> dict:
+    """Delete a room and its stored conversation history."""
+    room = ensure_room_access(db, room_id, current_user)
+    try:
+        room_repository.delete_with_children(db, room)
+        db.commit()
+        return {"room_id": room_id, "deleted": True}
+    except Exception:
+        logger.exception("room delete failed room_id=%s user_id=%s", room_id, current_user.user_id)
+        db.rollback()
+        raise
+
+
 def update_room(db: Session, room_id: int, data: RoomUpdate, current_user: User):
     room = ensure_room_access(db, room_id, current_user)
     try:
@@ -54,5 +93,6 @@ def update_room(db: Session, room_id: int, data: RoomUpdate, current_user: User)
         db.refresh(updated)
         return updated
     except Exception:
+        logger.exception("room update failed room_id=%s user_id=%s", room_id, current_user.user_id)
         db.rollback()
         raise

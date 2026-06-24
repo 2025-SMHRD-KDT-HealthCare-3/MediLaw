@@ -1,6 +1,8 @@
+import functools
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+import anyio
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
@@ -13,8 +15,24 @@ from app.schemas.chat_schema import ChatResponse
 from app.schemas.evidence_schema import EvidenceResponse
 from app.schemas.verification_schema import VerificationResponse
 from app.services import ai_ad_copy_service
+from app.utils.validators import validate_file_reference
 
 router = APIRouter(prefix="/ai-ad-copies", tags=["ai-ad-copies"])
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _upload_size(file: UploadFile) -> int | None:
+    size = getattr(file, "size", None)
+    if isinstance(size, int):
+        return size
+    if not file.file.seekable():
+        return None
+    current = file.file.tell()
+    file.file.seek(0, 2)
+    measured = file.file.tell()
+    file.file.seek(current)
+    return measured
 
 
 @router.post("")
@@ -36,16 +54,41 @@ async def review_ad_copy(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    file_content = await file.read() if file is not None else None
-    result = ai_ad_copy_service.review_document_and_create(
-        db,
-        current_user,
-        input_language=input_language,
-        text=text.strip() if isinstance(text, str) and text.strip() else None,
-        file_name=file.filename if file is not None else None,
-        file_content=file_content,
-        content_type=file.content_type if file is not None else None,
-        room_id=room_id,
+    file_content = None
+    file_name = None
+    if file is not None:
+        try:
+            file_name = validate_file_reference(file.filename or "upload")
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=str(exc),
+            ) from exc
+        size = _upload_size(file)
+        if size is not None and size > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="uploaded file is too large",
+            )
+        file_content = await file.read()
+        if len(file_content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="uploaded file is too large",
+            )
+
+    result = await anyio.to_thread.run_sync(
+        functools.partial(
+            ai_ad_copy_service.review_document_and_create,
+            db,
+            current_user,
+            input_language=input_language,
+            text=text.strip() if isinstance(text, str) and text.strip() else None,
+            file_name=file_name,
+            file_content=file_content,
+            content_type=file.content_type if file is not None else None,
+            room_id=room_id,
+        )
     )
     payload = {
         "ai_copy": AiAdCopyResponse.model_validate(result["ai_copy"]),
