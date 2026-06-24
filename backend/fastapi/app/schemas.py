@@ -204,6 +204,7 @@ class ReviewResponse(BaseModel):
     checklist: list[ChecklistItem] = Field(default_factory=list, description="능동형 확인목록(추가/삭제/유지 동적)")
     checklist_summary: ChecklistSummary = Field(default_factory=ChecklistSummary, description="상태별 항목 수")
     extracted_by: Literal["text", "ocr"] = Field("text", description="원문 추출 방식")
+    ocr_failed_pages: list[int] = Field(default_factory=list, description="스캔(OCR) 페이지인데 텍스트 추출에 실패한 페이지 번호(1-based). 비어있으면 정상")
     citation_check: VerifyResponse = Field(description="findings 인용의 Citation Firewall 검증")
     method: str = "hybrid"
     lang: str = Field("ko", description="실제 응답 언어")

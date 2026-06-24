@@ -99,8 +99,14 @@ def review_to_response(
         doc = r["document"]
         segs = r["segments"]
         rev = r["revisions"]
+        # scan 라우팅인데 텍스트가 한 글자도 안 뽑힌 페이지 = OCR 실패(1-based).
+        scan_pages = {rt.page for rt in r["routes"] if rt.route == "scan"}
+        pages_with_text = {b.page for b in doc.blocks if (b.text or "").strip()}
+        ocr_failed_pages = sorted(scan_pages - pages_with_text)
     elif text is not None:
         doc, segs, rev = _run_text_pipeline(text, as_of, top_k)
+        # 텍스트 경로는 스캔/OCR 없음 → 실패 페이지 없음.
+        ocr_failed_pages = []
     else:
         raise ValueError("pdf_bytes 또는 text 중 하나는 반드시 필요합니다.")
 
@@ -128,6 +134,7 @@ def review_to_response(
         checklist=[],
         checklist_summary=ChecklistSummary(),
         extracted_by=extracted_by,
+        ocr_failed_pages=ocr_failed_pages,
         citation_check=citation_check,
         method="hybrid",
         lang=resp_lang,
