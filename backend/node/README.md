@@ -20,7 +20,10 @@ PORT=4000
 FRONTEND_ORIGIN=http://localhost:5173
 FASTAPI_TARGET=http://127.0.0.1:8000
 PRODUCT_API_TARGET=http://127.0.0.1:8001
+HMS_API_KEY=
 ACCESS_TOKEN_EXPIRE_MINUTES=30
+SESSION_COOKIE_SAME_SITE=lax
+SESSION_COOKIE_SECURE=false
 LOGIN_TIMEOUT_MS=15000
 PRODUCT_PROXY_TIMEOUT_MS=190000
 RAG_PROXY_TIMEOUT_MS=190000
@@ -29,6 +32,9 @@ RAG_PROXY_TIMEOUT_MS=190000
 Do not commit `.env` files.
 
 `ACCESS_TOKEN_EXPIRE_MINUTES` should match the product FastAPI setting. The bridge uses it as the `session` cookie max age.
+`FRONTEND_ORIGIN` can be a comma-separated allowlist. Session cookie mutations with an existing cookie are checked against this origin list in production.
+Set `SESSION_COOKIE_SAME_SITE=none` and `SESSION_COOKIE_SECURE=true` only when the frontend and Node bridge are deployed cross-site over HTTPS.
+`HMS_API_KEY` is forwarded to the HMS FastAPI RAG service as `x-api-key`.
 Timeout values are milliseconds. Product/RAG defaults allow long AI and PDF review calls while preventing requests from waiting forever.
 
 ## Routing
