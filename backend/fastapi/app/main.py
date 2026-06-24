@@ -11,7 +11,15 @@ from fastapi import FastAPI
 
 from app.config import API_KEYS, DB_PATH
 from app.db import has_embeddings, vec_loaded
-from app.routers import chat, documents, laws, retrieve, source_pack, verify
+from app.routers import (
+    chat,
+    documents,
+    laws,
+    related_graph,
+    retrieve,
+    source_pack,
+    verify,
+)
 
 # 호출 구조: React(브라우저) → Node(메인 백엔드) → 이 FastAPI(AI). 프론트는 이 서버를 직접
 # 호출하지 않고 Node가 서버-서버로 호출하므로 CORS(브라우저 전용 규칙)는 불필요.
@@ -23,6 +31,7 @@ app = FastAPI(
 )
 
 app.include_router(retrieve.router)
+app.include_router(related_graph.router)
 app.include_router(source_pack.router)
 app.include_router(verify.router)
 app.include_router(chat.router)

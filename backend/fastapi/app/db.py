@@ -1,10 +1,11 @@
-"""SQLite 연결 — lru_cache 공유 커넥션. sqlite-vec 확장 로드 시도(있으면)."""
+"""SQLite 연결 — 스레드별 커넥션. sqlite-vec 확장 로드 시도(있으면)."""
 import sqlite3
-from functools import lru_cache
+import threading
 
 from app.config import DB_PATH
 
-_VEC_LOADED = False  # sqlite-vec 확장 로드 성공 여부
+_VEC_LOADED = False  # sqlite-vec 확장 로드 성공 여부(첫 커넥션 기준, 읽기전용·동일 DB라 스레드 불변)
+_local = threading.local()  # 스레드별 커넥션 보관
 
 
 def _load_vec(conn: sqlite3.Connection) -> bool:
@@ -26,17 +27,20 @@ def get_conn() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
-    _VEC_LOADED = _load_vec(conn)
+    loaded = _load_vec(conn)
+    # 첫 커넥션 생성 시점의 로드 결과를 모듈 전역에 기록(이후 vec_loaded()가 반환).
+    # 읽기전용·동일 DB라 스레드마다 결과가 같아 전역값으로 충분.
+    _VEC_LOADED = loaded
     return conn
 
 
-@lru_cache(maxsize=1)
-def _shared_conn() -> sqlite3.Connection:
-    return get_conn()
-
-
 def db() -> sqlite3.Connection:
-    return _shared_conn()
+    """현재 스레드 전용 커넥션 반환(없으면 생성·저장). 스레드별 커넥션이라 동시 사용 안전."""
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        conn = get_conn()
+        _local.conn = conn
+    return conn
 
 
 def vec_loaded() -> bool:

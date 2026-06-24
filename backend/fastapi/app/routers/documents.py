@@ -73,34 +73,49 @@ def _stream_gen(pdf_bytes: bytes, as_of, top_k: int, pages: "list[int] | None" =
     """SSE 이벤트 제너레이터: pages → page(별 before/after) → done.
 
     페이지 단위로 추출→세그먼트→위험판정→치환을 돌려 완료되는 대로 흘려보낸다.
+    제너레이터 전체를 try/except 로 감싸 루프 이전(route_pages/첫 yield) 단계에서
+    예외가 나도 마지막에 반드시 error(+가능하면 done) 이벤트를 보장한다.
     """
-    routes = routing.route_pages(pdf_bytes)
-    if pages is not None:
-        routes = [r for r in routes if r.page in pages]
-    total = len(routes)
-    yield _sse({"type": "pages", "page_count": total,
-                "routes": [{"page": r.page, "route": r.route} for r in routes]})
     risky_total = change_total = 0
-    for n, r in enumerate(routes, 1):
-        try:
-            res = process_pdf(pdf_bytes, as_of=as_of, top_k=top_k, pages=[r.page])
-            segs = res["segments"]
-            rev = res["revisions"]
-            findings = _page_findings(segs)
-            before = "\n".join(b["text"] for b in rev["blocks_before"])
-            after = "\n".join(b["text"] for b in rev["blocks_after"])
-            risky_total += len(findings)
-            change_total += len(rev["changes"])
-            yield _sse({
-                "type": "page", "page": r.page, "route": r.route,
-                "progress": f"{n}/{total}", "doc_type": res["document"].doc_type,
-                "original_text": before, "revised_text": after, "findings": findings,
-            })
-        except Exception as e:  # noqa: BLE001 — 한 페이지 실패가 전체 스트림을 끊지 않게
-            yield _sse({"type": "error", "page": r.page, "message": str(e)})
-    yield _sse({"type": "done",
-                "status": "reviewed",
-                "summary": {"page_count": total, "risky": risky_total, "changes": change_total}})
+    done_summary = None  # 정상 완료 시 done 이벤트 payload
+    try:
+        # PDF 전체 라우팅은 여기서 1회만. 이후 페이지별 호출엔 route_hint 로 재파싱 제거.
+        routes = routing.route_pages(pdf_bytes)
+        if pages is not None:
+            routes = [r for r in routes if r.page in pages]
+        total = len(routes)
+        yield _sse({"type": "pages", "page_count": total,
+                    "routes": [{"page": r.page, "route": r.route} for r in routes]})
+        for n, r in enumerate(routes, 1):
+            try:
+                # route_hint 로 미리 구한 라우팅을 넘겨 페이지마다 PDF 전체 재파싱 방지.
+                res = process_pdf(pdf_bytes, as_of=as_of, top_k=top_k,
+                                  pages=[r.page], route_hint=routes)
+                segs = res["segments"]
+                rev = res["revisions"]
+                findings = _page_findings(segs)
+                before = "\n".join(b["text"] for b in rev["blocks_before"])
+                after = "\n".join(b["text"] for b in rev["blocks_after"])
+                risky_total += len(findings)
+                change_total += len(rev["changes"])
+                event = {
+                    "type": "page", "page": r.page, "route": r.route,
+                    "progress": f"{n}/{total}", "doc_type": res["document"].doc_type,
+                    "original_text": before, "revised_text": after, "findings": findings,
+                }
+                # scan 페이지인데 추출 텍스트가 비면 OCR 실패 — "위험 없음"과 구별되게 경고.
+                if r.route == "scan" and not before.strip():
+                    event["warning"] = "ocr_failed"
+                yield _sse(event)
+            except Exception as e:  # noqa: BLE001 — 한 페이지 실패가 전체 스트림을 끊지 않게
+                yield _sse({"type": "error", "page": r.page, "message": str(e)})
+        done_summary = {"page_count": total, "risky": risky_total, "changes": change_total}
+    except Exception as e:  # noqa: BLE001 — 루프 이전 등 어떤 단계 예외도 스트림을 끊지 않게
+        yield _sse({"type": "error", "message": str(e)})
+    yield _sse({"type": "done", "status": "reviewed",
+                "summary": done_summary
+                if done_summary is not None
+                else {"risky": risky_total, "changes": change_total}})
 
 
 def _parse_pages(pages: str) -> "list[int] | None":
@@ -133,4 +148,6 @@ async def review_stream(
     top_k = max(1, min(8, top_k_per_segment))
     return StreamingResponse(
         _stream_gen(pdf_bytes, as_of, top_k, _parse_pages(pages)),
-        media_type="text/event-stream")
+        media_type="text/event-stream",
+        # 프록시(nginx 등) 버퍼링 방지 → 페이지별 점진 노출 보장.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

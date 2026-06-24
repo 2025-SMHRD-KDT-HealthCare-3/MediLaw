@@ -9,7 +9,8 @@ from app.schemas import Citation, SourcePackRequest, SourcePackResponse
 
 router = APIRouter(prefix="/v1", tags=["Source Pack"])
 
-_TYPE_LABEL = {"statute": "법령·조문", "case": "판례", "interpretation": "법령해석례"}
+_TYPE_LABEL = {"statute": "법령·조문", "case": "판례", "interpretation": "법령해석례",
+               "decision": "개인정보위 결정문", "guideline": "가이드라인"}
 
 
 @router.post("/source-pack", response_model=SourcePackResponse, dependencies=[Depends(require_api_key)])

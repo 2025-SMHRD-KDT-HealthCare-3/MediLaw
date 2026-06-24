@@ -23,7 +23,12 @@ _GEN_OPTS = {"reasoning_effort": REASONING_EFFORT} if REASONING_EFFORT else {}
 
 def chat(messages: list[dict]) -> str:
     """단발 생성. 답변 텍스트 반환."""
-    resp = _client().chat.completions.create(model=CHAT_MODEL, messages=messages, **_GEN_OPTS)
+    try:
+        resp = _client().chat.completions.create(model=CHAT_MODEL, messages=messages, **_GEN_OPTS)
+    except LLMUnavailable:
+        raise  # 키 미설정 등 의도된 예외는 그대로 전파
+    except Exception as e:  # OpenAI 런타임 에러(RateLimit/Timeout/Auth 등) → 호출부가 503/폴백 처리
+        raise LLMUnavailable(f"LLM 호출 실패: {e}") from e
     return resp.choices[0].message.content or ""
 
 
@@ -33,10 +38,15 @@ def chat_json(messages: list[dict]) -> dict:
     PDF 에디터처럼 구조화된 분석 결과가 필요할 때 사용.
     프롬프트에 'JSON' 단어가 포함돼야 함(OpenAI json_object 요구사항).
     """
-    resp = _client().chat.completions.create(
-        model=CHAT_MODEL, messages=messages,
-        response_format={"type": "json_object"}, **_GEN_OPTS,
-    )
+    try:
+        resp = _client().chat.completions.create(
+            model=CHAT_MODEL, messages=messages,
+            response_format={"type": "json_object"}, **_GEN_OPTS,
+        )
+    except LLMUnavailable:
+        raise  # 키 미설정 등 의도된 예외는 그대로 전파
+    except Exception as e:  # OpenAI 런타임 에러 → 호출부가 503/폴백 처리
+        raise LLMUnavailable(f"LLM 호출 실패: {e}") from e
     content = resp.choices[0].message.content or "{}"
     try:
         return json.loads(content)
@@ -59,7 +69,7 @@ def translate(text: str, target: str = "ko") -> str:
             **_GEN_OPTS,
         )
         return (resp.choices[0].message.content or "").strip() or text
-    except LLMUnavailable:
+    except Exception:  # LLM 실패 전반(키 미설정·런타임 에러) → 원문 반환(검색 degrade 보장)
         return text
 
 
@@ -86,7 +96,7 @@ def rewrite_query(history: list[dict], question: str) -> str:
             **_GEN_OPTS,
         )
         return (resp.choices[0].message.content or "").strip() or question
-    except LLMUnavailable:
+    except Exception:  # LLM 실패 전반(키 미설정·런타임 에러) → 원문 반환(검색 degrade 보장)
         return question
 
 
@@ -95,29 +105,44 @@ def ocr_image(b64_png: str) -> str:
 
     스캔본/이미지 PDF의 OCR fallback 용. 본문만 반환(설명 금지).
     """
-    resp = _client().chat.completions.create(
-        model=CHAT_MODEL,
-        messages=[{"role": "user", "content": [
-            {"type": "text", "text":
-                "이 이미지에 있는 모든 텍스트를 읽어 원문 그대로 출력하세요. "
-                "줄바꿈은 유지하고, 설명·요약 없이 본문 텍스트만 출력하세요. "
-                "글자가 없으면 빈 문자열을 출력하세요."},
-            {"type": "image_url",
-             "image_url": {"url": f"data:image/png;base64,{b64_png}"}},
-        ]}],
-        **_GEN_OPTS,
-    )
+    try:
+        resp = _client().chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text":
+                    "이 이미지에 있는 모든 텍스트를 읽어 원문 그대로 출력하세요. "
+                    "줄바꿈은 유지하고, 설명·요약 없이 본문 텍스트만 출력하세요. "
+                    "글자가 없으면 빈 문자열을 출력하세요."},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/png;base64,{b64_png}"}},
+            ]}],
+            **_GEN_OPTS,
+        )
+    except LLMUnavailable:
+        raise  # 키 미설정 등 의도된 예외는 그대로 전파
+    except Exception as e:  # OpenAI 런타임 에러 → 호출부가 503/폴백 처리
+        raise LLMUnavailable(f"LLM 호출 실패: {e}") from e
     return resp.choices[0].message.content or ""
 
 
 def chat_stream(messages: list[dict]) -> Iterator[str]:
     """토큰 스트리밍 (delta 텍스트만 yield)."""
-    stream = _client().chat.completions.create(
-        model=CHAT_MODEL, messages=messages, stream=True, **_GEN_OPTS
-    )
-    for chunk in stream:
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+    try:
+        stream = _client().chat.completions.create(
+            model=CHAT_MODEL, messages=messages, stream=True, **_GEN_OPTS
+        )
+    except LLMUnavailable:
+        raise  # 키 미설정 등 의도된 예외는 그대로 전파
+    except Exception as e:  # OpenAI 런타임 에러 → consumer(gen())가 error 이벤트 처리
+        raise LLMUnavailable(f"LLM 호출 실패: {e}") from e
+    try:
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+    except LLMUnavailable:
+        raise
+    except Exception as e:  # 순회 중 런타임 에러도 변환
+        raise LLMUnavailable(f"LLM 호출 실패: {e}") from e
