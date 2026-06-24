@@ -1,7 +1,5 @@
-import functools
 from typing import Literal
 
-import anyio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
@@ -46,7 +44,7 @@ def create_ai_ad_copy(
 
 
 @router.post("/ad-review")
-async def review_ad_copy(
+def review_ad_copy(
     input_language: Literal["ko", "en"] = Form("ko"),
     text: str | None = Form(None),
     room_id: int | None = Form(None),
@@ -70,25 +68,22 @@ async def review_ad_copy(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="uploaded file is too large",
             )
-        file_content = await file.read()
+        file_content = file.file.read()
         if len(file_content) > MAX_UPLOAD_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="uploaded file is too large",
             )
 
-    result = await anyio.to_thread.run_sync(
-        functools.partial(
-            ai_ad_copy_service.review_document_and_create,
-            db,
-            current_user,
-            input_language=input_language,
-            text=text.strip() if isinstance(text, str) and text.strip() else None,
-            file_name=file_name,
-            file_content=file_content,
-            content_type=file.content_type if file is not None else None,
-            room_id=room_id,
-        )
+    result = ai_ad_copy_service.review_document_and_create(
+        db,
+        current_user,
+        input_language=input_language,
+        text=text.strip() if isinstance(text, str) and text.strip() else None,
+        file_name=file_name,
+        file_content=file_content,
+        content_type=file.content_type if file is not None else None,
+        room_id=room_id,
     )
     payload = {
         "ai_copy": AiAdCopyResponse.model_validate(result["ai_copy"]),
