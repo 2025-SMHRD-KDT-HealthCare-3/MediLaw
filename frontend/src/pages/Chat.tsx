@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import ChatMessage from '../components/chat/ChatMessage'
 import { useChatStore } from '../store/chatStore'
 import type { ChatMessage as ChatMessageType, Citation, CitationStatus } from '../types/chat'
-import { createRoom, askAi } from '../api/chat'
+import { createRoom, askAi, getChats } from '../api/chat'
 
 // 백엔드 검증상태 → 우리 CitationStatus 매핑 (문서 §11)
 const STATUS_MAP: Record<string, CitationStatus> = {
@@ -12,21 +12,52 @@ const STATUS_MAP: Record<string, CitationStatus> = {
   ERROR: 'error',
 }
 
+const ROOM_KEY = 'medilaw_current_room' // localStorage 키
+
 export default function Chat() {
-  const { messages, addMessage } = useChatStore()
+  const { messages, addMessage, setMessages } = useChatStore()
   const [input, setInput] = useState('')
   const [roomId, setRoomId] = useState<number | string | null>(null)
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
-  // 화면 진입 시 방 하나 생성
+  // 화면 진입: 저장된 방 있으면 이어보기, 없으면 새 방 생성
   useEffect(() => {
     const init = async () => {
+      const savedId = localStorage.getItem(ROOM_KEY)
+
+      // 1) 저장된 방이 있으면 그 방 대화 불러오기
+      if (savedId) {
+        try {
+          const res = await getChats(savedId)
+          const chats = res.data ?? []
+          const restored: ChatMessageType[] = chats.map((c: any) => ({
+            id: String(c.chat_id),
+            role: c.speaker_type === 'USER' ? 'user' : 'assistant',
+            content: c.chat_text,
+            timestamp: c.chatted_at,
+          }))
+          setMessages(restored)
+          setRoomId(savedId)
+          return
+        } catch (err: any) {
+          if (err.response?.status === 401) {
+            navigate('/login')
+            return
+          }
+          // 방이 사라졌거나 오류 → 저장값 지우고 새로 생성으로 진행
+          localStorage.removeItem(ROOM_KEY)
+        }
+      }
+
+      // 2) 저장된 방 없음 → 새 방 생성
       try {
         const res = await createRoom('의료법 상담')
-        setRoomId(res.data?.room_id ?? null)
+        const newId = res.data?.room_id ?? null
+        setRoomId(newId)
+        if (newId != null) localStorage.setItem(ROOM_KEY, String(newId))
+        setMessages([])
       } catch (err: any) {
-        // 로그인 안 된 상태면 로그인 화면으로 (문서 §5)
         if (err.response?.status === 401) {
           navigate('/login')
           return
@@ -35,7 +66,7 @@ export default function Chat() {
       }
     }
     init()
-  }, [navigate])
+  }, [navigate, setMessages])
 
   const handleSend = async () => {
     if (!input.trim() || loading) return
@@ -103,11 +134,34 @@ export default function Chat() {
     }
   }
 
+  // 새 상담 시작 (현재 방 버리고 새로 생성)
+  const handleNewChat = async () => {
+    localStorage.removeItem(ROOM_KEY)
+    setMessages([])
+    setRoomId(null)
+    try {
+      const res = await createRoom('의료법 상담')
+      const newId = res.data?.room_id ?? null
+      setRoomId(newId)
+      if (newId != null) localStorage.setItem(ROOM_KEY, String(newId))
+    } catch (err) {
+      console.error('새 상담 생성 에러:', err)
+    }
+  }
+
   return (
-    <div className="flex h-screen flex-col bg-[#F7F8FA]">
-      <header className="border-b border-gray-200 bg-navy px-6 py-4">
-        <h1 className="text-lg font-bold text-white">AI 의료법 질의응답</h1>
-        <p className="text-xs text-aqua">답이 아니라 상태를 관리하는 도구</p>
+    <div className="flex flex-col bg-[#F7F8FA]" style={{ height: 'calc(100vh - 60px)' }}>
+      <header className="flex items-center justify-between border-b border-gray-200 bg-navy px-6 py-4">
+        <div>
+          <h1 className="text-lg font-bold text-white">AI 의료법 질의응답</h1>
+          <p className="text-xs text-aqua">답이 아니라 상태를 관리하는 도구</p>
+        </div>
+        <button
+          onClick={handleNewChat}
+          className="rounded-full border border-aqua px-4 py-1.5 text-sm font-medium text-aqua hover:bg-aqua hover:text-navy"
+        >
+          + 새 상담
+        </button>
       </header>
 
       <main className="flex-1 overflow-y-auto px-6 py-6">

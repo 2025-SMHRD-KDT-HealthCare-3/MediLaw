@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from 'react'
-import { getRooms, getAdReviews } from '../api/chat'
+import { getRooms, getAdReviews, deleteRoom } from '../api/chat'
 import RoomDetailModal from '../components/RoomDetailModal'
 
 interface Room {
@@ -50,6 +50,7 @@ export default function Dashboard() {
   const [ads, setAds] = useState<AdReview[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null)
+  const [deletingId, setDeletingId] = useState<number | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -73,6 +74,22 @@ export default function Dashboard() {
     load()
   }, [])
 
+  // 상담 삭제
+  const handleDelete = async (e: React.MouseEvent, room: Room) => {
+    e.stopPropagation() // 카드 클릭(모달 열기) 막기
+    if (!window.confirm(`'${room.room_title}' 상담을 삭제할까요?`)) return
+    setDeletingId(room.room_id)
+    try {
+      await deleteRoom(room.room_id)
+      setRooms((prev) => prev.filter((r) => r.room_id !== room.room_id))
+    } catch (err) {
+      console.error('삭제 실패:', err)
+      alert('삭제에 실패했어요. 잠시 후 다시 시도해주세요.')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#F7F8FA] p-8">
       <div className="mx-auto max-w-5xl">
@@ -95,16 +112,26 @@ export default function Dashboard() {
                     <div
                       key={r.room_id}
                       onClick={() => setSelectedRoom(r)}
-                      className="flex cursor-pointer items-center justify-between border-b border-gray-100 pb-3 transition-colors last:border-0 hover:bg-gray-50"
+                      className="group flex cursor-pointer items-center justify-between border-b border-gray-100 pb-3 transition-colors last:border-0 hover:bg-gray-50"
                     >
                       <div>
                         <p className="text-sm font-medium text-slate-800">{r.room_title}</p>
                         <p className="text-xs text-slate-400">{fmtDate(r.created_at)}</p>
                       </div>
-                      <span className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                        style={{ color: s.color, backgroundColor: `${s.color}1A` }}>
-                        ● {s.label}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
+                          style={{ color: s.color, backgroundColor: `${s.color}1A` }}>
+                          ● {s.label}
+                        </span>
+                        <button
+                          onClick={(e) => handleDelete(e, r)}
+                          disabled={deletingId === r.room_id}
+                          title="삭제"
+                          className="shrink-0 rounded-md px-2 py-1 text-sm text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 disabled:opacity-50"
+                        >
+                          ✕
+                        </button>
+                      </div>
                     </div>
                   )
                 })}
