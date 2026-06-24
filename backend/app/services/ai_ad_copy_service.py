@@ -166,7 +166,7 @@ def review_document_and_create(
                 ChatCreate(
                     chatter_id=current_user.user_id,
                     speaker_type="USER",
-                    chat_text=text or "PDF 광고검토",
+                    chat_text=text or "PDF 광고 검토",
                     chat_file=file_name,
                 ),
             )
@@ -176,7 +176,7 @@ def review_document_and_create(
                 ChatCreate(
                     chatter_id=None,
                     speaker_type="AI",
-                    chat_text=revised_text or "광고검토 결과가 저장되었습니다.",
+                    chat_text=revised_text or "광고 검토 결과가 저장되었습니다.",
                 ),
             )
             verifications = persist_hms_verifications(

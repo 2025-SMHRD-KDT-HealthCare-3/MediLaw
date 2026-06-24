@@ -28,15 +28,26 @@ python -m venv .venv
 .venv\Scripts\activate
 python -m pip install -r requirements.txt
 copy .env.example .env
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 서버 체크:
 
 ```bash
-curl http://127.0.0.1:8000/server-check
-curl http://127.0.0.1:8000/api/server-check
+curl http://127.0.0.1:8001/server-check
+curl http://127.0.0.1:8001/api/server-check
 ```
+
+Node bridge를 함께 사용할 때의 로컬 포트 기준:
+
+```text
+React Vite: http://localhost:5173
+Node bridge: http://localhost:4000
+HMS/RAG FastAPI: http://127.0.0.1:8000
+Product app FastAPI: http://127.0.0.1:8001
+```
+
+Product app의 `HMS_URL`은 HMS/RAG 서버를 가리켜야 합니다. Product app 자기 자신을 가리키면 AI 답변/광고 검토가 502로 실패할 수 있습니다.
 
 테스트 실행:
 

@@ -32,8 +32,8 @@ API_KEYS = {k.strip() for k in os.environ.get("API_KEYS", "").split(",") if k.st
 # 레이트리밋 (lawbot 무료 데모: IP당 분당 30회)
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "30"))
 
-# 검색 가능한 출처 종류
-SOURCE_TYPES = ("statute", "case", "interpretation")
+# 검색 가능한 출처 종류 (법령·판례·해석례·결정문·가이드라인)
+SOURCE_TYPES = ("statute", "case", "interpretation", "decision", "guideline")
 
 # 법제처 국가법령정보 공동활용 OC 키 — 법령 개정 현황(연혁/버전) 조회용.
 # 호출 IP/도메인이 등록돼 있어야 응답함(미등록 시 HTML 에러).

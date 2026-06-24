@@ -1,0 +1,16 @@
+# product(app) 이미지 빌드 컨텍스트 정리 — 용량/속도/보안.
+# backend/ 안의 다른 서버(node·fastapi)와 로컬 산출물은 product 이미지에 넣지 않는다.
+node/
+fastapi/
+node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.env
+storage/uploads/*
+tests/
+README.md

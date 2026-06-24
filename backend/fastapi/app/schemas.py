@@ -134,8 +134,19 @@ class ChatSource(BaseModel):
     is_official_en: bool = Field(False, description="공식 영문 출처 여부(법령 True)")
 
 
+class AnswerSegment(BaseModel):
+    type: Literal["text", "cite"]
+    text: str = Field("", description="text조각 본문 / cite면 표시 라벨 예 '[1]'")
+    n: Optional[int] = None
+    source_type: Optional[SourceType] = None
+    source_id: Optional[int] = None
+    label: str = ""
+
+
 class ChatResponse(BaseModel):
     answer: str
+    answer_segments: list[AnswerSegment] = Field(default_factory=list,
+        description="answer를 [n] 기준으로 쪼갠 렌더용 배열. cite 토큰에 seed(source_type/source_id) 포함")
     sources: list[ChatSource]
     citation_check: VerifyResponse = Field(description="답변 인용의 Citation Firewall 검증")
     method: str = "hybrid"
@@ -193,6 +204,7 @@ class ReviewResponse(BaseModel):
     checklist: list[ChecklistItem] = Field(default_factory=list, description="능동형 확인목록(추가/삭제/유지 동적)")
     checklist_summary: ChecklistSummary = Field(default_factory=ChecklistSummary, description="상태별 항목 수")
     extracted_by: Literal["text", "ocr"] = Field("text", description="원문 추출 방식")
+    ocr_failed_pages: list[int] = Field(default_factory=list, description="스캔(OCR) 페이지인데 텍스트 추출에 실패한 페이지 번호(1-based). 비어있으면 정상")
     citation_check: VerifyResponse = Field(description="findings 인용의 Citation Firewall 검증")
     method: str = "hybrid"
     lang: str = Field("ko", description="실제 응답 언어")
@@ -282,3 +294,53 @@ class LawDiffResponse(BaseModel):
     removed: int = 0
     changed: int = 0
     diffs: list[ArticleDiff] = Field(default_factory=list)
+
+
+# ---------- /v1/related-graph (연관 판례 그래프 — '더보기' 시각화) ----------
+class GraphSeed(BaseModel):
+    """사용자가 클릭한 인용 — 그래프에 반드시 포함·강조."""
+    source_type: SourceType
+    source_id: int
+
+
+class RelatedGraphRequest(BaseModel):
+    """입력 문구/질의 하나로 연관 판례 그래프를 요청 (챗봇·PDF 검토 공용)."""
+    text: str = Field(description="사용자가 보고 있던 문구/질의 (광고 문구, 챗봇 질의 등)")
+    lang: str = Field("ko", description="라벨 언어 ko|en")
+    as_of: Optional[str] = Field(None, description="시점 조회 YYYY-MM-DD")
+    top_k: int = Field(12, ge=1, le=30, description="검색 후보 수")
+    seeds: list[GraphSeed] = Field(
+        default_factory=list,
+        description="클릭한 [1] 인용(조문·판례). 그래프에 반드시 포함·강조")
+
+
+class GraphCase(BaseModel):
+    """그래프 말단 — 실재하는 판례 노드(검색 히트에서만 생성)."""
+    source_id: int
+    label: str = Field("", description="인용 라벨, 예: '대법원 2018두12345'")
+    title: str = ""
+    summary: str = ""
+    source_url: str = ""
+    highlighted: bool = Field(False, description="사용자가 클릭한 인용 노드 여부")
+
+
+class GraphIssue(BaseModel):
+    """그래프 중간 노드 — 위반 쟁점 묶음."""
+    label: str = Field(description="쟁점명, 예: '과장·허위 광고'")
+    statute: str = Field("", description="관련 조문 라벨, 예: '의료법 제56조'")
+    statute_highlighted: bool = Field(False, description="statute가 클릭한 인용인지")
+    cases: list[GraphCase] = Field(default_factory=list)
+    sanctions: list[str] = Field(default_factory=list, description="제재수위, 예: ['업무정지 1개월']")
+
+
+class GraphRoot(BaseModel):
+    label: str = ""
+    text: str = ""
+
+
+class RelatedGraphResponse(BaseModel):
+    """프론트 마인드맵 렌더용: root → issues → cases/sanctions."""
+    root: GraphRoot
+    issues: list[GraphIssue] = Field(default_factory=list)
+    method: str = Field("hybrid", description="검색 방식 hybrid|fts")
+    llm: bool = Field(True, description="gpt-5.5 쟁점 가공 성공 여부(false=규칙 폴백)")

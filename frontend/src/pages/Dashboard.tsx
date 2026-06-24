@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from 'react'
 import { getRooms, getAdReviews } from '../api/chat'
+import RoomDetailModal from '../components/RoomDetailModal'
 
 interface Room {
   room_id: number
@@ -48,6 +49,7 @@ export default function Dashboard() {
   const [rooms, setRooms] = useState<Room[]>([])
   const [ads, setAds] = useState<AdReview[]>([])
   const [loading, setLoading] = useState(true)
+  const [selectedRoom, setSelectedRoom] = useState<Room | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -90,7 +92,11 @@ export default function Dashboard() {
                 {rooms.map((r) => {
                   const s = ROOM_STYLE[r.room_status ?? ''] ?? { label: r.room_status ?? '-', color: '#6B7280' }
                   return (
-                    <div key={r.room_id} className="flex items-center justify-between border-b border-gray-100 pb-3 last:border-0">
+                    <div
+                      key={r.room_id}
+                      onClick={() => setSelectedRoom(r)}
+                      className="flex cursor-pointer items-center justify-between border-b border-gray-100 pb-3 transition-colors last:border-0 hover:bg-gray-50"
+                    >
                       <div>
                         <p className="text-sm font-medium text-slate-800">{r.room_title}</p>
                         <p className="text-xs text-slate-400">{fmtDate(r.created_at)}</p>
@@ -131,6 +137,16 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* 상담 상세 모달 */}
+      {selectedRoom && (
+        <RoomDetailModal
+          roomId={selectedRoom.room_id}
+          roomTitle={selectedRoom.room_title}
+          roomDate={fmtDate(selectedRoom.created_at)}
+          onClose={() => setSelectedRoom(null)}
+        />
+      )}
     </div>
   )
 }

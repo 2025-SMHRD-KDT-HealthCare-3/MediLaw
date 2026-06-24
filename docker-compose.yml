@@ -1,0 +1,96 @@
+# MediLaw 통합 실행 (백엔드 + 프론트 한 번에) — DB는 팀 공용 원격 MySQL 사용
+# ──────────────────────────────────────────────────────────────────────────────
+#   docker compose up --build
+#     → product(8001) + node-bridge(4000) + frontend(5173) 기동.
+#       DB는 학교 공용 MySQL(project-db-campus.smhrd.com:3312)에 바로 연결됨
+#       (스키마·데이터가 이미 있으므로 마이그레이션/시드 없이 그대로 사용).
+#       브라우저 http://localhost:5173 접속 → 본인 팀 계정으로 로그인.
+#
+#   (선택) 챗봇/검색 rag 서버까지:  docker compose --profile rag up --build
+#
+#   ※ 포트 안내: 컨테이너는 외부 DB 호스트(project-db-campus.smhrd.com:3312)로 직접
+#     다이얼아웃하므로 도커 포트매핑(ports)이 필요 없다. DATABASE_URL 에 그 host:3312 만
+#     정확히 적으면 된다. (localhost/host.docker.internal/포트노출 같은 트릭 불필요)
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+  # product — 로그인·회원·채팅 (FastAPI). 팀 공용 원격 MySQL 에 연결.
+  product:
+    build: ./backend
+    container_name: medilaw-product
+    environment:
+      ENVIRONMENT: local
+      # 팀 공용 원격 DB 접속 URL. 비밀번호 보호를 위해 값은 git에 안 올라가는 .env 에 둔다.
+      # (.env.example 을 복사해 .env 로 만들고 DATABASE_URL 을 채울 것)
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL을 .env 에 설정하세요 (.env.example 참고)}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-change-me-please}
+      ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+      CORS_ORIGINS: "*"
+      # 챗봇 RAG 답변 시 product 가 호출하는 rag 서버 주소(컨테이너 서비스명).
+      # rag profile 을 안 켜도 무해(챗봇 호출 때만 사용). rag 를 켜면 바로 연동됨.
+      HMS_URL: http://rag:8000
+    # 개발/테스트 편의: 앱 코드 바인드마운트 + uvicorn --reload → 백엔드 편집 시 재빌드 없이 자동반영.
+    # (이미지 CMD 는 그대로 두고 compose 에서만 override — 운영용 compose 에선 이 줄을 빼면 됨)
+    command: ["sh", "-c", "python -m app.seed; uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload --reload-dir /app/app"]
+    volumes:
+      - ./backend/app:/app/app
+    restart: on-failure
+    healthcheck:
+      # slim 에 curl 이 없어 python urllib 로 점검. server-check 는 DB 없이도 응답.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8001/api/server-check').status==200 else 1)"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    ports:
+      - "8001:8001"
+
+  # node-bridge — 프론트 요청 중계. product 가 health 통과한 뒤 기동(첫 503 방지).
+  node:
+    build: ./backend/node
+    container_name: medilaw-node
+    environment:
+      NODE_ENV: development
+      PORT: "4000"
+      FRONTEND_ORIGIN: http://localhost:5173
+      PRODUCT_API_TARGET: http://product:8001
+      FASTAPI_TARGET: http://rag:8000
+    depends_on:
+      product:
+        condition: service_healthy
+    ports:
+      - "4000:4000"
+
+  # frontend — Vite 개발 서버. 소스 실시간 마운트로 프론트 작업하며 핫리로드 가능.
+  frontend:
+    build: ./frontend
+    container_name: medilaw-frontend
+    environment:
+      VITE_PROXY_TARGET: http://node:4000
+      VITE_USE_POLLING: "1"          # 윈도우 바인드마운트에서 HMR(핫리로드) 동작용
+    volumes:
+      - ./frontend:/app              # 호스트 소스 실시간 반영(코드 고치면 즉시 갱신)
+      - /app/node_modules            # 컨테이너 node_modules 보존(호스트가 덮어쓰지 않게)
+    depends_on:
+      - node
+    ports:
+      - "5173:5173"
+
+  # (선택) rag — 챗봇/법령검색 AI 서버. 기본 실행엔 미포함(profile).
+  rag:
+    build: ./backend/fastapi
+    container_name: medilaw-rag
+    profiles: ["rag"]
+    environment:
+      PORT: "8000"
+      DB_PATH: data/medilaw.db
+    env_file:
+      # 팀원이 이 파일 없이 pull 받아도 기본 'docker compose up' 이 깨지지 않도록 optional.
+      # rag(챗봇/검색)를 실제로 켜려면 backend/fastapi/.env 에 OPENAI_API_KEY 를 채워야 함.
+      - path: ./backend/fastapi/.env
+        required: false
+    volumes:
+      # 검색 DB(1GB)는 이미지에 굽지 않고 런타임 마운트 — 빌드 빠르고, db 교체해도 재빌드 불필요.
+      - ./backend/fastapi/data:/app/data
+    ports:
+      - "8000:8000"
