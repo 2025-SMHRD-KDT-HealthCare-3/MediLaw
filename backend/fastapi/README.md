@@ -47,6 +47,7 @@
 | 🟢 **프론트용** | `POST /documents/review` | PDF/텍스트 위험 검토 + before/after(전체 한 번에) |
 | 🟢 **프론트용** | `POST /documents/review/stream` | 위와 동일, **페이지별 SSE 점진 노출**(앞 페이지부터) |
 | 🟢 **프론트용** | `POST /chat/checklist` | '체크리스트 생성' 버튼 — 대화+PDF검토 종합 → 통합 체크리스트 |
+| 🟢 **프론트용** | `POST /v1/related-graph` | 인용 `[n]`/finding **더보기** 클릭 → 연관 판례 엣지-노드 그래프 JSON |
 | 챗봇(단발) | `POST /chat` | 위와 동일, JSON 한 번에 반환(느림) |
 | 코어 | `POST /v1/retrieve` | 하이브리드 RAG 검색 |
 | 코어 | `POST /v1/source-pack` | LLM 인용용 근거 마크다운 번들 |
@@ -130,6 +131,8 @@ data: {"type":"done","citation_check":{
 ```
 에러 시 `{"type":"error","message":"..."}`. ⚠️ 브라우저 `EventSource`는 GET만 지원 → POST는 `fetch` + `ReadableStream`으로 직접 파싱.
 
+> **`answer_segments`** — `done` 이벤트(및 `/chat` 응답)에 답변을 `[n]` 기준으로 쪼갠 렌더용 배열이 함께 옵니다. `{type:"text"|"cite", text, n, source_type, source_id, label}` 토큰 배열이라 프론트가 정규식 파싱 없이 `cite` 토큰만 **클릭 가능**하게 그리면 됩니다. 클릭 시 그 토큰의 `{source_type, source_id}`를 그대로 [`/v1/related-graph`](#5-b-post-v1related-graph--연관-판례-그래프-) seed로 넘깁니다. (sources에 없는 `[n]`은 `text`로 강등 → 클릭 불가). → [프론트 연동 가이드](docs/frontend-related-graph.md)
+
 ```bash
 curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
   -d '{"question":"병원 광고에 \"국내 최초\" 표현 써도 되나요?","top_k":5}'
@@ -141,17 +144,21 @@ curl -N -X POST localhost:8077/chat/stream -H 'content-type: application/json' \
 
 문서(PDF/텍스트) → **신 PDF 파이프라인**(페이지 라우팅 → pdfplumber 텍스트·**표** ∥ 스캔본 **OCR** → doc_type 자동분류 → 세그먼트 → 위험판정 → 블록단위 before/after) → Citation Firewall.
 결과로 **before/after**(원문 ↔ 수정본)와 위험 세그먼트별 사유·대안·근거를 돌려줍니다(응답: `ReviewResponse`).
-> **LLM에 전부 위임하지 않음**: 근거 확보·인덱스·인용 연결 등 수치/구조는 **코드(코어 검색)**가, LLM은 위반여부·사유·대안 문구·risk_level만. OCR 기본 백엔드는 PaddleOCR-VL(자체호스팅), 메모리 부족 시 graceful. (체크리스트는 분리됨 → [`/chat/checklist`](#2-b-post-chatchecklist--통합-체크리스트대화--pdf-)).
+> **LLM에 전부 위임하지 않음**: 근거 확보·인덱스·인용 연결 등 수치/구조는 **코드(코어 검색)**가, LLM은 위반여부·사유·대안 문구·risk_level만. OCR 기본 백엔드는 PaddleOCR-VL(자체호스팅)이며 **실패(가중치 차단·메모리 부족 등) 시 페이지 단위로 gpt-5.5 비전으로 자동 폴백**(`OCR_FALLBACK_BACKEND=vision`, 끄려면 빈 값). (체크리스트는 분리됨 → [`/chat/checklist`](#2-b-post-chatchecklist--통합-체크리스트대화--pdf-)).
+> **OCR 실패 신호**: 스캔 페이지인데 텍스트 추출이 0이면 "위험 없음"과 헷갈리지 않도록 — 단발 `/documents/review`는 응답에 `ocr_failed_pages:[페이지번호…]`, 스트림은 해당 `page` 이벤트에 `"warning":"ocr_failed"`를 실어 보냅니다.
 
 **🟢 페이지별 스트리밍** `POST /documents/review/stream` (SSE) — 큰 PDF에서 **앞 페이지부터 즉시** 보여주고 뒤는 처리되는 대로 채우는 UX용:
 ```
 data: {"type":"pages","page_count":5,"routes":[{"page":1,"route":"digital"}, ...]}
 data: {"type":"page","page":1,"progress":"1/5","doc_type":"ad",
-       "original_text":"...","revised_text":"...","findings":[{"segment_index":0,
+       "original_text":"...","revised_text":"...",
+       "segments":["세그먼트0 원문","세그먼트1 원문", ...],   ← findings.segment_index가 가리키는 페이지-로컬 배열
+       "findings":[{"segment_index":0,
        "segment_text":"...","risk_level":"high","issue":"...","suggestion":"...","law":["..."]}]}
+data: {"type":"page","page":3,"route":"scan","warning":"ocr_failed", ...}   ← 스캔 OCR 실패(텍스트 0)
 data: {"type":"done","summary":{"page_count":5,"risky":3,"changes":2}}
 ```
-> 프론트: `page` 이벤트를 받는 즉시 그 페이지 카드를 before/after로 렌더(순서대로). `pages=2,3` 폼 필드로 특정 페이지만도 가능.
+> 프론트: `page` 이벤트를 받는 즉시 그 페이지 카드를 before/after로 렌더(순서대로). `findings[].segment_index`는 같은 이벤트의 `segments[]`를 가리키므로(페이지-로컬) `segments[finding.segment_index]`로 원문 역참조 가능. `pages=2,3` 폼 필드로 특정 페이지만도 가능.
 
 **프론트 SSE 예제(JS)** — `multipart`로 PDF 업로드 + 페이지별 점진 수신:
 ```js
@@ -348,6 +355,50 @@ AI 답변의 법령·판례 인용을 DB와 대조(존재·조문 정확성·판
 
 ---
 
+### 5-B. `POST /v1/related-graph` — 연관 판례 그래프 🟢
+
+챗봇 답변/PDF 검토에 인라인으로 뜬 인용 `[n]`(또는 finding)을 **더보기 클릭**했을 때 호출 → 보고 있던 문구를 **위반 쟁점별 판례·제재**의 엣지-노드 그래프로 구조화해 반환합니다(프론트가 마인드맵으로 렌더). 챗봇·PDF 공용.
+
+> 흐름: `hybrid_search`로 실재 조문·판례 확보 → **gpt-5.5**가 쟁점 클러스터링 + 제재수위 추출(후보를 idx로만 참조) → **Citation Firewall**로 환각/오참조 idx 제거 → 그래프 JSON. LLM 불가/검색 0건이면 규칙 폴백(`llm:false`).
+
+**요청** `Content-Type: application/json`
+```json
+{
+  "text": "국내 1위·100% 효과",        // 보고 있던 문구/질의 (그래프 중심)
+  "seeds": [                           // (선택) 클릭한 [n]이 가리키는 인용 — 그래프에 반드시 포함·강조
+    {"source_type": "statute", "source_id": 10},
+    {"source_type": "case", "source_id": 20}
+  ],
+  "lang": "ko",                        // 라벨 언어 ko|en
+  "as_of": null,                       // 시점 조회(선택)
+  "top_k": 12                          // 검색 후보 수 1~30
+}
+```
+> **seeds(앵커링)**: `answer_segments`의 `cite` 토큰이나 finding `citations[]`의 `{source_type, source_id}`를 그대로 넣으면, 재검색에서 빠지더라도 클릭한 그 인용이 그래프에 **반드시 포함되고 강조**(`highlighted`)됩니다. seeds 없이 `text`만 보내도 동작(하위호환).
+
+**응답** `RelatedGraphResponse`
+```json
+{
+  "root": {"label": "입력 문구", "text": "국내 1위·100% 효과"},
+  "issues": [
+    {"label": "과장·허위 광고", "statute": "의료법 제56조", "statute_highlighted": true,
+     "cases": [{"source_id": 20, "label": "대법원 2018두12345", "title": "...",
+                "summary": "...", "source_url": "...", "highlighted": true}],
+     "sanctions": ["업무정지 1개월"]}
+  ],
+  "method": "hybrid",   // hybrid|fts
+  "llm": true           // false면 규칙 폴백 그래프
+}
+```
+프론트는 `root → issues → cases/sanctions`를 노드, 그 부모-자식 관계를 엣지로 매핑하고 `highlighted`/`statute_highlighted`로 클릭한 노드를 강조합니다. → **[프론트 연동 가이드(JS 예제)](docs/frontend-related-graph.md)**
+
+```bash
+curl -s -X POST localhost:8077/v1/related-graph -H 'content-type: application/json' \
+  -d '{"text":"국내 1위 100% 효과 과장 의료광고","seeds":[{"source_type":"case","source_id":20}]}'
+```
+
+---
+
 ### 6. `GET /v1/statutes/search` — 법령 검색 (코어, lawbot 호환)
 
 조문 FTS를 법령 단위로. 쿼리 파라미터: `q`, `kind`(법률|대통령령|고시…), `trust_grade`, `as_of`, `limit`(1~100).
@@ -492,9 +543,11 @@ app/
     retrieve.py     POST /v1/retrieve, GET /v1/statutes/search
     source_pack.py  POST /v1/source-pack
     verify.py       POST /v1/verify
+    related_graph.py POST /v1/related-graph (인용 클릭→연관 판례 엣지-노드 그래프)
     chat.py         POST /chat, POST /chat/stream, POST /chat/checklist (gpt-5.5 RAG 챗봇·체크리스트)
-    documents.py    POST /documents/review (PDF→위험검토→before/after, 비전 OCR fallback)
+    documents.py    POST /documents/review(+/stream) (PDF→위험검토→before/after, OCR 실패 시 gpt-5.5 폴백)
     laws.py         GET /v1/laws/revisions·{law_id}/revisions·diff (법령 개정 현황 대시보드)
+  related_graph.py 연관 판례 그래프 코어: hybrid_search→gpt-5.5 쟁점 클러스터링→Citation Firewall
   llm.py          OpenAI gpt-5.5 래퍼 (chat / chat_stream / chat_json / ocr_image / translate)
   english.py      영어 입력 지원: 언어감지 + 공식 영문 법령(articles_en) 조회
   lawapi.py       법제처 DRF 클라이언트(개정 연혁/버전·조문) + law_revisions 동기화·캐시
