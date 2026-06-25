@@ -31,10 +31,17 @@ export async function getAdReviews() {
   return res.data;
 }
 
-// 광고문구 검토 요청
-export async function reviewAdCopy(text: string) {
-  const res = await api.post('/ai-ad-copies', { input_text: text });
-  return res.data;
+// 광고문구 검토 요청 (텍스트 + PDF 파일 지원)
+// 파일이 있으면 multipart/form-data로 /ai-ad-copies/ad-review 에 전송
+export async function reviewAdCopy(text: string, file?: File | null, roomId?: number) {
+  const form = new FormData();
+  form.append('input_language', 'ko');
+  if (text.trim()) form.append('text', text.trim());
+  if (file) form.append('file', file); // 필드명 'file'
+  if (roomId != null) form.append('room_id', String(roomId));
+
+  const res = await api.post('/ai-ad-copies/ad-review', form);
+  return res.data; // { success, message, data: { ai_copy, ... } }
 }
 
 // 상담방 삭제
