@@ -154,7 +154,8 @@ data: {"type":"page","page":1,"progress":"1/5","doc_type":"ad",
        "original_text":"...","revised_text":"...",
        "segments":["세그먼트0 원문","세그먼트1 원문", ...],   ← findings.segment_index가 가리키는 페이지-로컬 배열
        "findings":[{"segment_index":0,
-       "segment_text":"...","risk_level":"high","issue":"...","suggestion":"...","law":["..."]}]}
+       "segment_text":"...","risk_level":"high","issue":"...","suggestion":"...","law":["..."],
+       "page":1,"bbox":[0.12,0.34,0.88,0.41]}]}    ← page=1-based 페이지, bbox=페이지 상대 정규화 좌표(0~1, 좌상단 원점). 좌표 없으면 null
 data: {"type":"page","page":3,"route":"scan","warning":"ocr_failed", ...}   ← 스캔 OCR 실패(텍스트 0)
 data: {"type":"done","summary":{"page_count":5,"risky":3,"changes":2}}
 ```
@@ -222,6 +223,8 @@ reviewStream(fileInput.files[0], {
     "risk_level": "high",                                  // high | medium | low
     "issue": "절대적 안전성 단정은 의료광고 가이드라인 위반 소지...",
     "suggestion": "시술 전 효과·부작용 가능성을 충분히 안내합니다", // after(세그먼트)
+    "page": 1,                                            // 위험 세그먼트의 1-based 페이지 (텍스트 입력이면 null)
+    "bbox": [0.12, 0.34, 0.88, 0.41],                     // [x0,y0,x1,y1] 페이지 상대 정규화 좌표(0~1, 좌상단 원점). 좌표 없으면 null
     "citations": [{"n":1,"label":"[가이드라인] 의료광고 가이드라인.pdf",
                    "source_type":"guideline","source_id":45,"snippet":"...","source_url":"...","trust_grade":""}]
   }],
@@ -245,6 +248,51 @@ reviewStream(fileInput.files[0], {
 ```
 - **프론트 렌더**: `original_text`↔`revised_text` diff 뷰 / `findings[].segment_index`로 `segments[]`에서 위험 조각을 찾아 `risk_level`별 색칠 → 클릭 시 사유·대안·근거 패널 / `extracted_by==="ocr"`면 "OCR 인식(오인식 가능)" 배지.
 - **능동형 체크리스트**: `checklist`를 할 일 목록으로 표시(`checklist_summary`로 진행률). 사용자가 문서를 고쳐 재요청할 때 직전 `checklist`를 `prev_checklist`로 보내면 해결 항목은 `change:"removed"`, 새 항목은 `"added"`로 동적 갱신. 사용자가 항목을 `ok`/`na`로 체크하거나 `note`를 달아 되돌려주면 다음 분석이 그 상태·메모를 **보존**합니다(단, 문서에 위반 문구가 명백히 남아 있으면 안전하게 `risk`로 재플래그).
+
+#### 🟢 PDF 위 before/after 하이라이트(방식 Y)
+
+`findings[]`의 **`page`+`bbox`** 좌표를 이용해, 프론트가 **PDF 원본 위에 직접** 위험(빨강)·수정(초록) 박스를 그리는 방식입니다. diff 텍스트 뷰 대신(또는 함께) "원본 PDF 모양 그대로" 검토 결과를 보여줄 때 씁니다.
+> 이건 **PDF 검토 하이라이트**용입니다 — 연관 판례 그래프(`docs/frontend-related-graph.md`)와는 별개.
+
+**좌표 규격(정규화 bbox)**
+- `bbox = [x0, y0, x1, y1]` 는 **해당 페이지 폭/높이에 대한 비율 0~1**. **좌상단(0,0) 원점**, x는 오른쪽·y는 아래로 증가.
+- 프론트는 PDF를 직접 렌더한 **캔버스 픽셀 크기**를 곱해 박스 위치를 얻습니다:
+  `px = x0 * canvasWidth`, `py = y0 * canvasHeight`, `w = (x1-x0) * canvasWidth`, `h = (y1-y0) * canvasHeight`.
+- 정규화 좌표라 **렌더 배율·DPI와 무관**(해상도 독립) — digital PDF·스캔본 OCR 모두 동일 규격.
+- `page` 는 1-based(첫 페이지=1). **`page`/`bbox` 가 `null`** 이면(텍스트 입력·좌표 산출 실패) 박스를 못 그리므로 텍스트 목록으로 폴백.
+
+**흐름**
+1. 사용자가 PDF 업로드 → 프론트가 **그 PDF 파일을 그대로** `/documents/review`(또는 `/documents/review/stream`)에 전송(기존과 동일). 백엔드가 위험·수정·좌표 JSON 반환.
+2. 프론트는 **같은 PDF 파일을 브라우저에서 [pdf.js](https://mozilla.github.io/pdf.js/)로 직접 렌더**(좌=원본 / 우=수정본 두 캔버스, 또는 같은 페이지를 2벌).
+3. 응답 `findings` 를 `page` 별로 묶어 박스 오버레이:
+   - **왼쪽(원본)**: 각 finding의 `bbox`에 **빨강** 박스(위험) — `issue` 툴팁, `segment_text`(before).
+   - **오른쪽(수정본)**: 같은 `bbox` 위치에 **초록** 박스 + `suggestion`(after) 표시.
+4. `page`/`bbox` 가 `null` 인 finding은 박스 못 그림 → **텍스트 목록으로 폴백**.
+> 스트림(`/stream`)도 동일 — `page` 이벤트의 `findings[]` 각각에 `page`/`bbox` 가 실려 오므로, 그 페이지 캔버스가 렌더되는 즉시 박스를 얹으면 됩니다.
+
+**좌표 변환 + 박스 그리기(JS 의사코드)**
+```js
+// canvas: pdf.js로 그 page를 렌더한 캔버스. findings: 그 page에 속한 finding 배열.
+function drawBoxes(canvas, findings, { mode }) {        // mode: "before"(빨강) | "after"(초록)
+  const ctx = canvas.getContext("2d");
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = mode === "before" ? "rgba(220,38,38,0.9)" : "rgba(22,163,74,0.9)";
+  for (const f of findings) {
+    if (!f.bbox) continue;                               // 좌표 없으면 폴백(텍스트 목록)
+    const [x0, y0, x1, y1] = f.bbox;                      // 0~1 정규화
+    const px = x0 * canvas.width, py = y0 * canvas.height;
+    const w  = (x1 - x0) * canvas.width, h = (y1 - y0) * canvas.height;
+    ctx.strokeRect(px, py, w, h);                         // 박스
+    // 툴팁/라벨: before→f.issue·f.segment_text, after→f.suggestion (HTML 오버레이로 px,py에 배치)
+  }
+}
+
+// page별로 묶어 좌/우 캔버스에 각각
+const byPage = {};
+for (const f of resp.findings) (byPage[f.page] ??= []).push(f);   // f.page=null은 제외 → 텍스트 폴백
+drawBoxes(leftCanvas[page],  byPage[page], { mode: "before" });   // 원본=빨강
+drawBoxes(rightCanvas[page], byPage[page], { mode: "after"  });   // 수정본=초록
+```
 
 ```bash
 curl -X POST localhost:8077/documents/review -F "file=@ad.pdf"
