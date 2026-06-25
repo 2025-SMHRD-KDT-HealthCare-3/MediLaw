@@ -16,9 +16,9 @@ from __future__ import annotations
 from functools import lru_cache
 
 from app import llm
-from app.db import db
+from app.db import db, has_embeddings
 from app.pdf.schema import RiskResult, Segment
-from app.rag import fmt_article_label, hybrid_search
+from app.rag import embed_queries, fmt_article_label, hybrid_search
 from app.schemas import Hit
 
 _VALID_LEVELS = {"none", "low", "med", "high"}
@@ -142,20 +142,32 @@ def _gather(segments: list[Segment], as_of: str | None, top_k: int) -> list[list
     """세그먼트별 hybrid_search → per-segment hits 리스트. (근거를 코드가 결정)
 
     질의는 원문 + doc_type별 법률용어 힌트로 보강해 관련 조문 적중률을 높인다.
+    속도: 세그먼트별 단건 임베딩(N회 순차) 대신, 전 세그먼트 질의를 모아 **1회 배치 임베딩**
+    한 뒤 미리 구한 벡터로 검색한다(임베딩 API 왕복 N→1, rate-limit 회피). FTS는 로컬이라 per-seg.
     """
-    per_segment: list[list] = []
-    for seg in segments:
+    per_segment: list[list] = [[] for _ in segments]
+
+    # 1) 비어있지 않은 세그먼트의 보강 질의를 모은다(원본 인덱스 보존).
+    idxs: list[int] = []
+    queries: list[str] = []
+    for i, seg in enumerate(segments):
         text = (seg.text or "").strip()
         if not text:
-            per_segment.append([])
             continue
         hint = _QUERY_HINT.get(seg.doc_type or "", "")
-        query = f"{text} {hint}".strip() if hint else text
+        idxs.append(i)
+        queries.append(f"{text} {hint}".strip() if hint else text)
+
+    # 2) 배치 임베딩 1회(임베딩 인덱스 있을 때만; 키 없음/실패 시 None → FTS 전용).
+    vecs = embed_queries(queries) if (queries and has_embeddings()) else [None] * len(queries)
+
+    # 3) 세그먼트별 검색 — 미리 구한 qvec 사용(재임베딩 없음). FTS는 로컬이라 per-seg OK.
+    for i, query, qvec in zip(idxs, queries, vecs):
         try:
-            hits, _ = hybrid_search(query, None, top_k=top_k, as_of=as_of)
+            hits, _ = hybrid_search(query, None, top_k=top_k, as_of=as_of, qvec=qvec)
         except Exception:  # noqa: BLE001 — 검색 실패해도 판정은 계속(근거 없이)
             hits = []
-        per_segment.append(hits)
+        per_segment[i] = hits
     return per_segment
 
 

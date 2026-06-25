@@ -58,6 +58,33 @@ def embed_query(text: str) -> list[float] | None:
         return None
 
 
+def embed_queries(texts: list[str]) -> list[list[float] | None]:
+    """여러 질의를 OpenAI 임베딩 1회 호출로 배치 임베딩(런타임 N→1 단축).
+
+    반환은 입력과 같은 순서·길이. 키 없음/실패 시 [None]*len(texts)(graceful → FTS 전용).
+    """
+    if not texts:
+        return []
+    if not OPENAI_API_KEY:
+        return [None] * len(texts)
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.embeddings.create(
+            model=EMBED_MODEL, input=texts, dimensions=EMBED_DIM
+        )
+        # data 순서는 input 순서와 같지만 방어적으로 index 기준 정렬.
+        by_idx = {d.index: d.embedding for d in resp.data}
+        return [by_idx.get(i) for i in range(len(texts))]
+    except Exception:
+        return [None] * len(texts)
+
+
+# hybrid_search 의 qvec 인자 기본값 — "미지정(내부 임베딩)"과 "None(벡터검색 생략)"을 구분.
+_UNSET = object()
+
+
 # ---------- 시점(as_of) 정규화 ----------
 def _compact(date_str: str) -> str:
     """'YYYY-MM-DD' 또는 'YYYYMMDD' → 'YYYYMMDD'."""
@@ -256,13 +283,19 @@ def hybrid_search(
     source_types: list[str] | None = None,
     top_k: int = DEFAULT_TOP_K,
     as_of: str | None = None,
+    qvec=_UNSET,
 ) -> tuple[list[Hit], str]:
-    """RRF로 FTS+벡터 융합. (hits, method) 반환."""
+    """RRF로 FTS+벡터 융합. (hits, method) 반환.
+
+    qvec: 미지정(_UNSET)이면 내부에서 query를 임베딩. 미리 구한 벡터를 넘기면
+        재임베딩을 건너뛴다(런타임 배치 임베딩용). None을 명시하면 벡터검색 생략(FTS 전용).
+    """
     types = set(source_types) if source_types else {"statute", "case", *_DOC_TYPES}
     pool = max(top_k * 3, 30)
 
     fts = fts_search(query, types, pool)
-    qvec = embed_query(query) if has_embeddings() else None
+    if qvec is _UNSET:
+        qvec = embed_query(query) if has_embeddings() else None
     vraw = vector_search(qvec, types, pool) if qvec else []
     method = "hybrid" if vraw else "fts"
 
