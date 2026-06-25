@@ -29,20 +29,36 @@ const ITEM_STYLE: Record<string, { label: string; color: string }> = {
   na: { label: '해당 없음', color: '#6B7280' },
 }
 
+// 위험도(high/medium/low) → 화면 상태값 매핑
+const RISK_MAP: Record<string, string> = { high: 'risk', medium: 'todo', low: 'ok' }
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB (백엔드 제한)
+
 export default function AdReview() {
   const [text, setText] = useState('')
+  const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ParsedResult | null>(null)
   const [error, setError] = useState('')
 
   const handleReview = async () => {
-    if (!text.trim() || loading) return
+    // 텍스트 또는 파일 중 하나는 있어야 함
+    if ((!text.trim() && !file) || loading) return
+
+    // 파일 크기 체크
+    if (file && file.size > MAX_FILE_SIZE) {
+      setError('파일 크기는 10MB 이하만 가능합니다.')
+      return
+    }
+
     setError('')
     setResult(null)
     setLoading(true)
     try {
-      const res = await reviewAdCopy(text)
-      const data = res.data ?? res
+      const res = await reviewAdCopy(text, file)
+      // 응답 데이터 위치 보정: 검토 결과는 ai_copy 안에 담겨 옴 (없으면 root 그대로)
+      const root = res.data ?? res
+      const data = root.ai_copy ?? root
 
       // legal_basis는 문자열로 옴 → 한 번 더 파싱
       let legal: any = {}
@@ -54,11 +70,30 @@ export default function AdReview() {
         legal = {}
       }
 
+      // 위험 항목은 legal.findings에 들어옴 (checklist/checklist_summary는 광고검토에서 비어 있음)
+      const findings: any[] = Array.isArray(legal.findings) ? legal.findings : []
+
+      const checklist: ChecklistItem[] = findings.map((f, i) => ({
+        id: String(f.segment_index ?? i),
+        title: f.segment_text,                  // 위험 문구 원문
+        reason: f.issue,                        // 위험 사유 (근거 법령은 문장 끝 "(근거: …)")
+        status: RISK_MAP[f.risk_level] ?? 'na', // high→위반소지 / medium→확인필요 / low→문제없음
+        citations: f.citations ?? [],           // 비어 올 수 있음
+      }))
+
+      const summary = {
+        total: checklist.length,
+        risk: checklist.filter((c) => c.status === 'risk').length,
+        todo: checklist.filter((c) => c.status === 'todo').length,
+        ok: checklist.filter((c) => c.status === 'ok').length,
+        na: checklist.filter((c) => c.status === 'na').length,
+      }
+
       setResult({
         inputText: data.input_text ?? text,
         revision: data.revision_recomm ?? data.alternative_text,
-        checklist: legal.checklist ?? [],
-        summary: legal.checklist_summary,
+        checklist,
+        summary,
       })
     } catch (err: any) {
       console.error('광고검토 에러:', err)
@@ -73,7 +108,7 @@ export default function AdReview() {
       <div className="mx-auto max-w-2xl">
         <h1 className="text-2xl font-bold text-navy mb-1">광고문구 검토</h1>
         <p className="text-sm text-slate-500 mb-6">
-          의료광고 문구를 입력하면 법령 위반 소지를 검토해드립니다.
+          의료광고 문구를 입력하거나 PDF를 업로드하면 법령 위반 소지를 검토해드립니다.
         </p>
 
         <textarea
@@ -85,10 +120,41 @@ export default function AdReview() {
           className="w-full rounded-lg border border-gray-300 p-4 text-sm focus:border-aqua focus:outline-none disabled:bg-gray-100"
         />
 
+        {/* PDF 업로드 */}
+        <div className="mt-3">
+          <label className="mb-1 block text-xs font-medium text-slate-500">
+            또는 PDF 파일 업로드 (선택)
+          </label>
+          <div className="flex items-center gap-3">
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              disabled={loading}
+              className="text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-navy file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-navy/90 disabled:opacity-50"
+            />
+            {file && (
+              <button
+                type="button"
+                onClick={() => setFile(null)}
+                disabled={loading}
+                className="text-xs text-slate-400 hover:text-red-500"
+              >
+                제거
+              </button>
+            )}
+          </div>
+          {file && (
+            <p className="mt-1 text-xs text-slate-500">
+              선택됨: {file.name} ({(file.size / 1024 / 1024).toFixed(1)}MB)
+            </p>
+          )}
+        </div>
+
         <button
           onClick={handleReview}
-          disabled={loading}
-          className="mt-3 rounded-lg bg-navy px-6 py-2.5 text-sm font-medium text-white hover:bg-navy/90 disabled:opacity-50"
+          disabled={loading || (!text.trim() && !file)}
+          className="mt-4 rounded-lg bg-navy px-6 py-2.5 text-sm font-medium text-white hover:bg-navy/90 disabled:opacity-50"
         >
           {loading ? '검토 중…' : '검토 요청'}
         </button>

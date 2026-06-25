@@ -34,3 +34,9 @@ export async function updateMe(payload: {
   const res = await api.patch('/users/me', payload);
   return res.data;
 }
+
+// 로그아웃 (서버 세션 쿠키 삭제)
+export async function logout() {
+  const res = await api.post('/auth/logout')
+  return res.data
+}
