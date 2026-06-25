@@ -6,6 +6,8 @@
 - interpretation(해석례)·decision(결정문)·guideline(가이드라인): documents 테이블에 적재되어 검색됨
 """
 import re
+import threading
+from collections import OrderedDict
 from functools import lru_cache
 
 from app.config import (
@@ -56,6 +58,89 @@ def embed_query(text: str) -> list[float] | None:
         return resp.data[0].embedding
     except Exception:
         return None
+
+
+# ---------- 임베딩 캐시 ----------
+# 같은 질의 문구의 재임베딩(API 왕복)을 피하기 위한 모듈 레벨 bounded LRU 캐시.
+# 키 = (EMBED_MODEL, EMBED_DIM, text) — 모델/차원이 바뀌면 캐시가 섞이지 않게.
+# None(실패·키없음)은 캐시하지 않는다(일시 실패가 영구 캐시되지 않도록).
+_EMBED_CACHE_MAX = 4096
+_embed_cache: "OrderedDict[tuple, list[float]]" = OrderedDict()
+_embed_cache_lock = threading.Lock()
+
+
+def _embed_cache_get(text: str) -> list[float] | None:
+    """캐시 조회. 적중 시 LRU 갱신(최근 사용으로 이동)."""
+    key = (EMBED_MODEL, EMBED_DIM, text)
+    with _embed_cache_lock:
+        vec = _embed_cache.get(key)
+        if vec is not None:
+            _embed_cache.move_to_end(key)
+        return vec
+
+
+def _embed_cache_put(text: str, vec: list[float]) -> None:
+    """캐시 적재 + 상한 초과 시 가장 오래된 항목 제거(LRU). None은 호출 전에 걸러진다."""
+    key = (EMBED_MODEL, EMBED_DIM, text)
+    with _embed_cache_lock:
+        _embed_cache[key] = vec
+        _embed_cache.move_to_end(key)
+        while len(_embed_cache) > _EMBED_CACHE_MAX:
+            _embed_cache.popitem(last=False)  # 가장 오래된 것 제거
+
+
+def embed_queries(texts: list[str]) -> list[list[float] | None]:
+    """여러 질의를 OpenAI 임베딩 1회 호출로 배치 임베딩(런타임 N→1 단축).
+
+    반환은 입력과 같은 순서·길이. 키 없음/실패 시 [None]*len(texts)(graceful → FTS 전용).
+    캐시: 같은 문구는 재임베딩하지 않고, 미캐시 유니크 텍스트만 1회 배치 호출.
+    """
+    if not texts:
+        return []
+
+    # 1) 캐시 적중분을 먼저 채우고, 미적중 유니크 텍스트만 모은다(순서·길이 보존).
+    out: list[list[float] | None] = [None] * len(texts)
+    miss_positions: dict[str, list[int]] = {}  # 텍스트 → 그 텍스트가 등장한 입력 인덱스들
+    for i, t in enumerate(texts):
+        cached = _embed_cache_get(t)
+        if cached is not None:
+            out[i] = cached
+        else:
+            miss_positions.setdefault(t, []).append(i)
+
+    if not miss_positions:
+        return out  # 전부 캐시 적중 → API 미호출
+
+    if not OPENAI_API_KEY:
+        return out  # 미적중분은 None(graceful → FTS 전용)
+
+    # 2) 미캐시 유니크 텍스트만 1회 배치 임베딩.
+    uniq_texts = list(miss_positions.keys())
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        resp = client.embeddings.create(
+            model=EMBED_MODEL, input=uniq_texts, dimensions=EMBED_DIM
+        )
+        # data 순서는 input 순서와 같지만 방어적으로 index 기준 정렬.
+        by_idx = {d.index: d.embedding for d in resp.data}
+    except Exception:
+        return out  # 실패분은 None 유지(예외 전파·캐시 금지)
+
+    # 3) 결과를 원래 위치들에 매핑하고, None 이 아닌 것만 캐시에 적재.
+    for j, t in enumerate(uniq_texts):
+        vec = by_idx.get(j)
+        if vec is None:
+            continue  # 부분 실패분은 None 유지·캐시 금지
+        _embed_cache_put(t, vec)
+        for pos in miss_positions[t]:
+            out[pos] = vec
+    return out
+
+
+# hybrid_search 의 qvec 인자 기본값 — "미지정(내부 임베딩)"과 "None(벡터검색 생략)"을 구분.
+_UNSET = object()
 
 
 # ---------- 시점(as_of) 정규화 ----------
@@ -256,13 +341,19 @@ def hybrid_search(
     source_types: list[str] | None = None,
     top_k: int = DEFAULT_TOP_K,
     as_of: str | None = None,
+    qvec=_UNSET,
 ) -> tuple[list[Hit], str]:
-    """RRF로 FTS+벡터 융합. (hits, method) 반환."""
+    """RRF로 FTS+벡터 융합. (hits, method) 반환.
+
+    qvec: 미지정(_UNSET)이면 내부에서 query를 임베딩. 미리 구한 벡터를 넘기면
+        재임베딩을 건너뛴다(런타임 배치 임베딩용). None을 명시하면 벡터검색 생략(FTS 전용).
+    """
     types = set(source_types) if source_types else {"statute", "case", *_DOC_TYPES}
     pool = max(top_k * 3, 30)
 
     fts = fts_search(query, types, pool)
-    qvec = embed_query(query) if has_embeddings() else None
+    if qvec is _UNSET:
+        qvec = embed_query(query) if has_embeddings() else None
     vraw = vector_search(qvec, types, pool) if qvec else []
     method = "hybrid" if vraw else "fts"
 

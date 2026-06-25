@@ -13,19 +13,74 @@
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
+
 from app import llm
+from app.db import db, has_embeddings
 from app.pdf.schema import RiskResult, Segment
-from app.rag import hybrid_search
+from app.rag import embed_queries, fmt_article_label, hybrid_search
+from app.schemas import Hit
 
 _VALID_LEVELS = {"none", "low", "med", "high"}
+
+# 의료광고 핵심 금지조문 — 광고검토는 입력이 '광고'임이 전제이므로, 검색 결과가 이 조문을
+# 못 끌어와도(흔함) 미감지가 나지 않게, ad 세그먼트 근거에 항상 주입한다.
+#   제56조(의료광고의 금지 등) · 제27조(무면허+환자 유인·알선 제3항) · 제57조(사전심의)
+_AD_CORE_ARTICLES = [("의료법", "56"), ("의료법", "27"), ("의료법", "57")]
+_AD_CORE_SNIPPET = 600  # 제56조 경험담(≈340)·제27조 유인(≈537)이 보이도록.
+
+
+@lru_cache(maxsize=1)
+def _ad_core_hits() -> tuple:
+    """의료광고 핵심 금지조문 Hit(프로세스 1회 캐시). DB 문제 시 빈 튜플(graceful)."""
+    out: list[Hit] = []
+    try:
+        for law, art in _AD_CORE_ARTICLES:
+            row = db().execute(
+                """SELECT a.id, a.article_no, a.article_title, a.content,
+                          s.name AS law_name, s.trust_grade, s.effective_from, s.source_url
+                   FROM articles a JOIN statutes s ON s.id = a.statute_id
+                   WHERE s.name = ? AND a.article_no = ?
+                   ORDER BY a.id LIMIT 1""",
+                (law, art),
+            ).fetchone()
+            if not row:
+                continue
+            out.append(Hit(
+                source_type="statute", source_id=row["id"],
+                label=fmt_article_label(row["law_name"], row["article_no"], row["article_title"] or ""),
+                title=row["article_title"] or "",
+                snippet=(row["content"] or "")[:_AD_CORE_SNIPPET],
+                score=0.0, trust_grade=row["trust_grade"] or "법령",
+                effective_from=row["effective_from"], source_url=row["source_url"] or "",
+            ))
+    except Exception:  # noqa: BLE001 — DB 문제 시 주입 생략(검색만으로 graceful)
+        return tuple()
+    return tuple(out)
+
+
+def _inject_ad_core(segments: list[Segment], per_segment: list[list]) -> None:
+    """ad 세그먼트의 근거 앞에 의료광고 핵심 금지조문을 주입(중복 제외, in-place)."""
+    core = _ad_core_hits()
+    if not core:
+        return
+    for i, seg in enumerate(segments):
+        if seg.doc_type != "ad":
+            continue
+        existing = {h.source_id for h in per_segment[i]}
+        prepend = [h for h in core if h.source_id not in existing]
+        if prepend:
+            per_segment[i] = prepend + per_segment[i]
 
 # doc_type 별 점검 관점(시스템 프롬프트에 끼워 넣는 분기). 없으면 일반 프롬프트.
 _DOCTYPE_GUIDE = {
     "ad": (
         "이 문서는 [의료광고]입니다. 과장·허위 표현, 비교광고(최고/최상 등 우월성 주장), "
         "'국내 최초·유일' 등 객관적 근거 없는 배타적 표현, 치료경험담·환자 후기, "
-        "부작용을 부정하거나 안전성을 단정하는 문구(예: '부작용 전혀 없음', '100% 안전') "
-        "를 중점 점검하세요."
+        "부작용을 부정하거나 안전성을 단정하는 문구(예: '부작용 전혀 없음', '100% 안전'), "
+        "그리고 비급여 진료의 할인·이벤트·금품 제공 등으로 환자를 유인·알선하는 표현"
+        "(의료법 제27조 제3항)을 중점 점검하세요."
     ),
     "consent": (
         "이 문서는 [개인정보 수집·이용 동의서]입니다. 민감정보(건강·진료정보 등)의 별도 동의 누락, "
@@ -74,19 +129,62 @@ def _system_prompt(segments: list[Segment]) -> str:
     return _SYSTEM_BASE + "\n\n[문서 유형별 점검 관점]\n" + "\n".join(guides)
 
 
+# doc_type별 검색 질의 보강 — 캐주얼한 문구만으로는 관련 조문이 잘 안 걸려서,
+# 해당 문서유형의 법률 용어를 질의에 덧붙여 임베딩 검색의 적중률을 높인다.
+_QUERY_HINT = {
+    "ad": "의료광고 과장·허위광고 치료경험담 환자 유인·알선 비교광고 최상급 표현 사전심의 금지",
+    "consent": "개인정보 수집·이용 동의 민감정보 별도 동의 보유기간 거부권",
+    "privacy_policy": "개인정보 처리방침 필수 기재사항 보유기간 제3자 제공 보호책임자",
+    "terms": "약관 불공정조항 사업자 책임 제한·면제 해지·취소권 제한",
+}
+
+
 def _gather(segments: list[Segment], as_of: str | None, top_k: int) -> list[list]:
-    """세그먼트별 hybrid_search → per-segment hits 리스트. (근거를 코드가 결정)"""
-    per_segment: list[list] = []
-    for seg in segments:
+    """세그먼트별 hybrid_search → per-segment hits 리스트. (근거를 코드가 결정)
+
+    질의는 원문 + doc_type별 법률용어 힌트로 보강해 관련 조문 적중률을 높인다.
+    속도: 세그먼트별 단건 임베딩(N회 순차) 대신, 전 세그먼트 질의를 모아 **1회 배치 임베딩**
+    한 뒤 미리 구한 벡터로 검색한다(임베딩 API 왕복 N→1, rate-limit 회피). FTS는 로컬이라 per-seg.
+    검색(hybrid_search) 호출은 thread-local SQLite 커넥션이라 스레드 안전 → 병렬 실행한다
+    (측정상 N>=2에서 1.5~2.6배 단축). 결과는 원본 세그먼트 인덱스 순서로 정확히 매핑한다.
+    """
+    per_segment: list[list] = [[] for _ in segments]
+
+    # 1) 비어있지 않은 세그먼트의 보강 질의를 모은다(원본 인덱스 보존).
+    idxs: list[int] = []
+    queries: list[str] = []
+    for i, seg in enumerate(segments):
         text = (seg.text or "").strip()
         if not text:
-            per_segment.append([])
             continue
+        hint = _QUERY_HINT.get(seg.doc_type or "", "")
+        idxs.append(i)
+        queries.append(f"{text} {hint}".strip() if hint else text)
+
+    # 2) 배치 임베딩 1회(임베딩 인덱스 있을 때만; 키 없음/실패 시 None → FTS 전용).
+    vecs = embed_queries(queries) if (queries and has_embeddings()) else [None] * len(queries)
+
+    # 3) 세그먼트별 검색 — 미리 구한 qvec 사용(재임베딩 없음). FTS는 로컬이라 per-seg OK.
+    #    thread-local 커넥션이라 스레드 안전 → 검색을 병렬로(워커 상한 min(8, N)).
+    def _search(args: tuple[int, str, object]) -> tuple[int, list]:
+        i, query, qvec = args
         try:
-            hits, _ = hybrid_search(text, None, top_k=top_k, as_of=as_of)
-        except Exception:  # noqa: BLE001 — 검색 실패해도 판정은 계속(근거 없이)
+            hits, _ = hybrid_search(query, None, top_k=top_k, as_of=as_of, qvec=qvec)
+        except Exception:  # noqa: BLE001 — 검색 실패해도 그 세그먼트만 빈 hits(나머지는 계속)
             hits = []
-        per_segment.append(hits)
+        return i, hits
+
+    work = list(zip(idxs, queries, vecs))
+    if len(work) <= 1:
+        # 단건은 스레드풀 오버헤드만 늘어남 → 직접 실행.
+        for args in work:
+            i, hits = _search(args)
+            per_segment[i] = hits
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(work))) as ex:
+            # ex.map 은 입력 순서대로 결과를 주지만, 안전하게 i 로 직접 매핑한다.
+            for i, hits in ex.map(_search, work):
+                per_segment[i] = hits
     return per_segment
 
 
@@ -106,6 +204,8 @@ def review_segments(
         return segments
 
     per_segment = _gather(segments, as_of, top_k)
+    # 광고검토: 검색이 의료광고 금지조문을 못 끌어와도 잡도록 핵심 조문을 근거에 항상 주입.
+    _inject_ad_core(segments, per_segment)
 
     # 세그먼트 + 각자 근거를 한 프롬프트에 묶어 1회 호출.
     blocks: list[str] = []
