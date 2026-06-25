@@ -128,16 +128,31 @@ def _system_prompt(segments: list[Segment]) -> str:
     return _SYSTEM_BASE + "\n\n[문서 유형별 점검 관점]\n" + "\n".join(guides)
 
 
+# doc_type별 검색 질의 보강 — 캐주얼한 문구만으로는 관련 조문이 잘 안 걸려서,
+# 해당 문서유형의 법률 용어를 질의에 덧붙여 임베딩 검색의 적중률을 높인다.
+_QUERY_HINT = {
+    "ad": "의료광고 과장·허위광고 치료경험담 환자 유인·알선 비교광고 최상급 표현 사전심의 금지",
+    "consent": "개인정보 수집·이용 동의 민감정보 별도 동의 보유기간 거부권",
+    "privacy_policy": "개인정보 처리방침 필수 기재사항 보유기간 제3자 제공 보호책임자",
+    "terms": "약관 불공정조항 사업자 책임 제한·면제 해지·취소권 제한",
+}
+
+
 def _gather(segments: list[Segment], as_of: str | None, top_k: int) -> list[list]:
-    """세그먼트별 hybrid_search → per-segment hits 리스트. (근거를 코드가 결정)"""
+    """세그먼트별 hybrid_search → per-segment hits 리스트. (근거를 코드가 결정)
+
+    질의는 원문 + doc_type별 법률용어 힌트로 보강해 관련 조문 적중률을 높인다.
+    """
     per_segment: list[list] = []
     for seg in segments:
         text = (seg.text or "").strip()
         if not text:
             per_segment.append([])
             continue
+        hint = _QUERY_HINT.get(seg.doc_type or "", "")
+        query = f"{text} {hint}".strip() if hint else text
         try:
-            hits, _ = hybrid_search(text, None, top_k=top_k, as_of=as_of)
+            hits, _ = hybrid_search(query, None, top_k=top_k, as_of=as_of)
         except Exception:  # noqa: BLE001 — 검색 실패해도 판정은 계속(근거 없이)
             hits = []
         per_segment.append(hits)
