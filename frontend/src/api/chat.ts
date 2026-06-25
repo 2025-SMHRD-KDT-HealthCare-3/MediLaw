@@ -36,3 +36,9 @@ export async function reviewAdCopy(text: string) {
   const res = await api.post('/ai-ad-copies', { input_text: text });
   return res.data;
 }
+
+// 상담방 삭제
+export async function deleteRoom(roomId: number | string) {
+  const res = await api.delete(`/rooms/${roomId}`);
+  return res.data;
+}
