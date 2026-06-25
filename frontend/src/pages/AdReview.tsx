@@ -29,6 +29,9 @@ const ITEM_STYLE: Record<string, { label: string; color: string }> = {
   na: { label: '해당 없음', color: '#6B7280' },
 }
 
+// 위험도(high/medium/low) → 화면 상태값 매핑
+const RISK_MAP: Record<string, string> = { high: 'risk', medium: 'todo', low: 'ok' }
+
 export default function AdReview() {
   const [text, setText] = useState('')
   const [loading, setLoading] = useState(false)
@@ -54,11 +57,30 @@ export default function AdReview() {
         legal = {}
       }
 
+      // 위험 항목은 legal.findings에 들어옴 (checklist/checklist_summary는 광고검토에서 비어 있음)
+      const findings: any[] = Array.isArray(legal.findings) ? legal.findings : []
+
+      const checklist: ChecklistItem[] = findings.map((f, i) => ({
+        id: String(f.segment_index ?? i),
+        title: f.segment_text,                  // 위험 문구 원문
+        reason: f.issue,                        // 위험 사유 (근거 법령은 문장 끝 "(근거: …)")
+        status: RISK_MAP[f.risk_level] ?? 'na', // high→위반소지 / medium→확인필요 / low→문제없음
+        citations: f.citations ?? [],           // 비어 올 수 있음
+      }))
+
+      const summary = {
+        total: checklist.length,
+        risk: checklist.filter((c) => c.status === 'risk').length,
+        todo: checklist.filter((c) => c.status === 'todo').length,
+        ok: checklist.filter((c) => c.status === 'ok').length,
+        na: checklist.filter((c) => c.status === 'na').length,
+      }
+
       setResult({
         inputText: data.input_text ?? text,
         revision: data.revision_recomm ?? data.alternative_text,
-        checklist: legal.checklist ?? [],
-        summary: legal.checklist_summary,
+        checklist,
+        summary,
       })
     } catch (err: any) {
       console.error('광고검토 에러:', err)
