@@ -12,8 +12,10 @@ pypdfium2==5.10.1
 Pillow==12.2.0
 python-dotenv==1.0.1
 
-# 임베딩 / 하이브리드 검색
-openai==1.57.0
+# 임베딩 / 하이브리드 검색 + 생성(gpt-5.5)
+# 주의: gpt-5.5 / reasoning_effort(추론 강도) 파라미터는 openai>=2.x 필요.
+#       1.57.0 등 구버전은 reasoning_effort 미지원 → 챗봇 생성 호출이 깨짐.
+openai==2.41.1
 numpy==2.2.0
 sqlite-vec==0.1.6
 
