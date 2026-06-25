@@ -1,6 +1,6 @@
 ﻿import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getMe, updateMe } from '../api/auth'
+import { getMe, updateMe, logout as logoutApi } from '../api/auth'
 import { useAuthStore } from '../store/authStore'
 
 interface UserInfo {
@@ -52,8 +52,13 @@ export default function MyPage() {
     }
   }
 
-  const handleLogout = () => {
-    logout()
+  const handleLogout = async () => {
+    try {
+      await logoutApi() // 서버 세션 쿠키 삭제
+    } catch {
+      // 서버 로그아웃 실패해도 클라이언트는 정리하고 진행
+    }
+    logout()            // 클라이언트 상태(authStore) 정리
     navigate('/login')
   }
 

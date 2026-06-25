@@ -32,13 +32,13 @@ function fmtDate(s?: string) {
 }
 
 // legal_basis 문자열에서 상태 계산
+// 위험 정보는 legal.findings에 들어옴 (checklist_summary는 광고검토에서 항상 비어 있음)
 function calcAdStatus(legalBasisStr?: string): string {
   try {
     const legal = JSON.parse(legalBasisStr ?? '{}')
-    const sum = legal.checklist_summary
-    if (!sum) return 'ok'
-    if (sum.risk > 0) return 'risk'
-    if (sum.todo > 0) return 'todo'
+    const findings = Array.isArray(legal.findings) ? legal.findings : []
+    if (findings.some((f: any) => f.risk_level === 'high')) return 'risk'
+    if (findings.some((f: any) => f.risk_level === 'medium')) return 'todo'
     return 'ok'
   } catch {
     return 'ok'
