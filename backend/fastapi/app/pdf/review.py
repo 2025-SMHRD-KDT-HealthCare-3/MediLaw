@@ -13,19 +13,73 @@
 """
 from __future__ import annotations
 
+from functools import lru_cache
+
 from app import llm
+from app.db import db
 from app.pdf.schema import RiskResult, Segment
-from app.rag import hybrid_search
+from app.rag import fmt_article_label, hybrid_search
+from app.schemas import Hit
 
 _VALID_LEVELS = {"none", "low", "med", "high"}
+
+# 의료광고 핵심 금지조문 — 광고검토는 입력이 '광고'임이 전제이므로, 검색 결과가 이 조문을
+# 못 끌어와도(흔함) 미감지가 나지 않게, ad 세그먼트 근거에 항상 주입한다.
+#   제56조(의료광고의 금지 등) · 제27조(무면허+환자 유인·알선 제3항) · 제57조(사전심의)
+_AD_CORE_ARTICLES = [("의료법", "56"), ("의료법", "27"), ("의료법", "57")]
+_AD_CORE_SNIPPET = 600  # 제56조 경험담(≈340)·제27조 유인(≈537)이 보이도록.
+
+
+@lru_cache(maxsize=1)
+def _ad_core_hits() -> tuple:
+    """의료광고 핵심 금지조문 Hit(프로세스 1회 캐시). DB 문제 시 빈 튜플(graceful)."""
+    out: list[Hit] = []
+    try:
+        for law, art in _AD_CORE_ARTICLES:
+            row = db().execute(
+                """SELECT a.id, a.article_no, a.article_title, a.content,
+                          s.name AS law_name, s.trust_grade, s.effective_from, s.source_url
+                   FROM articles a JOIN statutes s ON s.id = a.statute_id
+                   WHERE s.name = ? AND a.article_no = ?
+                   ORDER BY a.id LIMIT 1""",
+                (law, art),
+            ).fetchone()
+            if not row:
+                continue
+            out.append(Hit(
+                source_type="statute", source_id=row["id"],
+                label=fmt_article_label(row["law_name"], row["article_no"], row["article_title"] or ""),
+                title=row["article_title"] or "",
+                snippet=(row["content"] or "")[:_AD_CORE_SNIPPET],
+                score=0.0, trust_grade=row["trust_grade"] or "법령",
+                effective_from=row["effective_from"], source_url=row["source_url"] or "",
+            ))
+    except Exception:  # noqa: BLE001 — DB 문제 시 주입 생략(검색만으로 graceful)
+        return tuple()
+    return tuple(out)
+
+
+def _inject_ad_core(segments: list[Segment], per_segment: list[list]) -> None:
+    """ad 세그먼트의 근거 앞에 의료광고 핵심 금지조문을 주입(중복 제외, in-place)."""
+    core = _ad_core_hits()
+    if not core:
+        return
+    for i, seg in enumerate(segments):
+        if seg.doc_type != "ad":
+            continue
+        existing = {h.source_id for h in per_segment[i]}
+        prepend = [h for h in core if h.source_id not in existing]
+        if prepend:
+            per_segment[i] = prepend + per_segment[i]
 
 # doc_type 별 점검 관점(시스템 프롬프트에 끼워 넣는 분기). 없으면 일반 프롬프트.
 _DOCTYPE_GUIDE = {
     "ad": (
         "이 문서는 [의료광고]입니다. 과장·허위 표현, 비교광고(최고/최상 등 우월성 주장), "
         "'국내 최초·유일' 등 객관적 근거 없는 배타적 표현, 치료경험담·환자 후기, "
-        "부작용을 부정하거나 안전성을 단정하는 문구(예: '부작용 전혀 없음', '100% 안전') "
-        "를 중점 점검하세요."
+        "부작용을 부정하거나 안전성을 단정하는 문구(예: '부작용 전혀 없음', '100% 안전'), "
+        "그리고 비급여 진료의 할인·이벤트·금품 제공 등으로 환자를 유인·알선하는 표현"
+        "(의료법 제27조 제3항)을 중점 점검하세요."
     ),
     "consent": (
         "이 문서는 [개인정보 수집·이용 동의서]입니다. 민감정보(건강·진료정보 등)의 별도 동의 누락, "
@@ -106,6 +160,8 @@ def review_segments(
         return segments
 
     per_segment = _gather(segments, as_of, top_k)
+    # 광고검토: 검색이 의료광고 금지조문을 못 끌어와도 잡도록 핵심 조문을 근거에 항상 주입.
+    _inject_ad_core(segments, per_segment)
 
     # 세그먼트 + 각자 근거를 한 프롬프트에 묶어 1회 호출.
     blocks: list[str] = []
