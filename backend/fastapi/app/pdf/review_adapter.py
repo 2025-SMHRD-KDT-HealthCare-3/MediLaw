@@ -20,7 +20,8 @@ from __future__ import annotations
 from typing import Optional
 
 from app.citations import extract_and_verify, summarize
-from app.pdf import classify, revise, review, segment
+from app.pdf import classify, geometry, revise, review, segment
+from app.pdf.extract_ocr import OCR_SCALE
 from app.pdf.pipeline import process_pdf
 from app.pdf.schema import Block, Document, Segment
 from app.schemas import (
@@ -54,12 +55,22 @@ def _run_text_pipeline(
     return doc, segs, rev
 
 
-def _build_findings(segs: list[Segment]) -> list[ReviewFinding]:
+def _build_findings(
+    segs: list[Segment],
+    block_by_id: dict | None = None,
+    page_sizes: dict | None = None,
+) -> list[ReviewFinding]:
     """위험(risk.level in low/med/high) 세그먼트만 ReviewFinding 으로 변환.
 
     근거 법령명(risk.law)은 issue 뒤에 덧붙인다(citations 는 빈 배열로 — 별도 검증은
     citation_check 가 담당).
+
+    block_by_id/page_sizes 가 주어지면(PDF 경로) 각 finding 에 page/bbox(정규화 좌표)를
+    채운다. 안 주어지면(텍스트 경로/인라인 테스트) finding_geometry 가 (None, None) 을
+    반환 → 기존 동작과 동일(page/bbox None).
     """
+    block_by_id = block_by_id or {}
+    page_sizes = page_sizes or {}
     findings: list[ReviewFinding] = []
     for idx, seg in enumerate(segs):
         risk = seg.risk
@@ -69,6 +80,7 @@ def _build_findings(segs: list[Segment]) -> list[ReviewFinding]:
         if risk.law:
             laws = ", ".join(risk.law)
             issue = f"{issue} (근거: {laws})" if issue else f"근거: {laws}"
+        pg, bbox = geometry.finding_geometry(seg, block_by_id, page_sizes, OCR_SCALE)
         findings.append(
             ReviewFinding(
                 segment_index=idx,
@@ -77,6 +89,8 @@ def _build_findings(segs: list[Segment]) -> list[ReviewFinding]:
                 issue=issue,
                 suggestion=risk.after or "",
                 citations=[],
+                page=pg,
+                bbox=bbox,
             )
         )
     return findings
@@ -114,7 +128,14 @@ def review_to_response(
     original_text = _join_text(rev["blocks_before"])
     revised_text = _join_text(rev["blocks_after"])
     segments = [s.text for s in segs]
-    findings = _build_findings(segs)
+    # PDF 경로면 블록 좌표·페이지 크기를 넘겨 finding 의 page/bbox(정규화)를 채운다.
+    # 텍스트 경로면 인자 미전달 → finding_geometry 가 (None, None) 반환(graceful).
+    if pdf_bytes is not None:
+        block_by_id = {b.id: b for b in doc.blocks}
+        sizes = geometry.page_sizes(pdf_bytes)
+        findings = _build_findings(segs, block_by_id, sizes)
+    else:
+        findings = _build_findings(segs)
     extracted_by = "ocr" if any(b.source == "ocr" for b in doc.blocks) else "text"
 
     # Citation Firewall — findings 의 issue+suggestion 텍스트에서 인용 추출·검증.

@@ -170,6 +170,8 @@ class ReviewFinding(BaseModel):
     issue: str = Field(description="위험 사유")
     suggestion: str = Field(description="대안 문구(수정 권고)")
     citations: list[ChatSource] = Field(default_factory=list, description="판단 근거")
+    page: Optional[int] = Field(None, description="위험 세그먼트가 위치한 1-based 페이지(텍스트 입력 시 None)")
+    bbox: Optional[list[float]] = Field(None, description="페이지 상대 정규화 좌표 [x0,y0,x1,y1] (0~1, 좌상단 원점). 프론트는 렌더 캔버스 크기를 곱해 박스를 그림. 좌표 없으면 None")
 
 
 ChecklistStatus = Literal["todo", "ok", "risk", "na"]

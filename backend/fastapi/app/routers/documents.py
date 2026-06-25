@@ -14,7 +14,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.auth import require_api_key
-from app.pdf import routing
+from app.pdf import geometry, routing
+from app.pdf.extract_ocr import OCR_SCALE
 from app.pdf.pipeline import process_pdf
 from app.pdf.review_adapter import review_to_response
 from app.schemas import ReviewResponse
@@ -52,8 +53,14 @@ def _sse(obj: dict) -> str:
     return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
 
 
-def _page_findings(segments) -> list[dict]:
-    """그 페이지 세그먼트 중 위험한 것 → ReviewFinding 형태 dict 목록."""
+def _page_findings(segments, block_by_id=None, page_sizes=None) -> list[dict]:
+    """그 페이지 세그먼트 중 위험한 것 → ReviewFinding 형태 dict 목록.
+
+    block_by_id/page_sizes 가 주어지면 각 finding 에 page/bbox(정규화 좌표)를 채운다.
+    안 주어지면 finding_geometry 가 (None, None) 반환(graceful).
+    """
+    block_by_id = block_by_id or {}
+    page_sizes = page_sizes or {}
     out = []
     # segment_index 는 enumerate(segments) 의 페이지-로컬 0-based 인덱스.
     # page 이벤트가 같은 페이지의 segments 원문 배열을 함께 내보내므로(self-contained),
@@ -61,6 +68,7 @@ def _page_findings(segments) -> list[dict]:
     for i, s in enumerate(segments):
         r = s.risk
         if r and r.level in ("low", "med", "high"):
+            pg, bbox = geometry.finding_geometry(s, block_by_id, page_sizes, OCR_SCALE)
             out.append({
                 "segment_index": i,
                 "segment_text": s.text,
@@ -68,6 +76,8 @@ def _page_findings(segments) -> list[dict]:
                 "issue": r.reason,
                 "suggestion": r.after,
                 "law": list(r.law),
+                "page": pg,
+                "bbox": bbox,
             })
     return out
 
@@ -87,6 +97,8 @@ def _stream_gen(pdf_bytes: bytes, as_of, top_k: int, pages: "list[int] | None" =
         if pages is not None:
             routes = [r for r in routes if r.page in pages]
         total = len(routes)
+        # 페이지 크기(포인트)는 PDF 전체에서 1회만 계산해 페이지 루프에서 재사용.
+        page_sizes = geometry.page_sizes(pdf_bytes)
         yield _sse({"type": "pages", "page_count": total,
                     "routes": [{"page": r.page, "route": r.route} for r in routes]})
         for n, r in enumerate(routes, 1):
@@ -96,7 +108,8 @@ def _stream_gen(pdf_bytes: bytes, as_of, top_k: int, pages: "list[int] | None" =
                                   pages=[r.page], route_hint=routes)
                 segs = res["segments"]
                 rev = res["revisions"]
-                findings = _page_findings(segs)
+                block_by_id = {b.id: b for b in res["document"].blocks}
+                findings = _page_findings(segs, block_by_id, page_sizes)
                 before = "\n".join(b["text"] for b in rev["blocks_before"])
                 after = "\n".join(b["text"] for b in rev["blocks_after"])
                 risky_total += len(findings)
