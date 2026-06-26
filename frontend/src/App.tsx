@@ -8,6 +8,7 @@ import { useAuthStore } from './store/authStore'
 import AdReview from './pages/AdReview'
 import Signup from './pages/Signup'
 import Home from './pages/Home'
+import LawUpdates from './pages/LawUpdates'
 
 function App() {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn)
@@ -15,8 +16,8 @@ function App() {
   const navigate = useNavigate()
 
   const handleLogout = () => {
-    logout()              // 로그인 깃발 내리기
-    navigate('/login')    // 로그인 화면으로
+    logout()
+    navigate('/login')
   }
 
   return (
@@ -28,6 +29,7 @@ function App() {
             <Link to="/chat" className="hover:text-aqua">챗봇</Link>
             <Link to="/dashboard" className="hover:text-aqua">대시보드</Link>
             <Link to="/ad-review" className="hover:text-aqua">광고검토</Link>
+            <Link to="/law-updates" className="hover:text-aqua">법령 개정</Link>
             <Link to="/mypage" className="hover:text-aqua">마이페이지</Link>
             <button onClick={handleLogout} className="ml-auto hover:text-aqua">
               로그아웃
@@ -44,6 +46,7 @@ function App() {
         <Route path="/chat" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
         <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/ad-review" element={<ProtectedRoute><AdReview /></ProtectedRoute>} />
+        <Route path="/law-updates" element={<ProtectedRoute><LawUpdates /></ProtectedRoute>} />
         <Route path="/mypage" element={<ProtectedRoute><MyPage /></ProtectedRoute>} />
         <Route path="/" element={<Home />} />
       </Routes>
