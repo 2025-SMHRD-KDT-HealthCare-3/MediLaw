@@ -35,3 +35,8 @@ def update(db: Session, ai_copy: AiAdCopy, data: AiAdCopyUpdate) -> AiAdCopy:
     db.flush()
     db.refresh(ai_copy)
     return ai_copy
+
+
+def delete(db: Session, ai_copy: AiAdCopy) -> None:
+    db.delete(ai_copy)
+    db.flush()

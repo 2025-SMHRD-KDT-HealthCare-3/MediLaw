@@ -309,7 +309,7 @@ app.use(
 )
 
 app.use('/api/rag', (req, res, next) => {
-  if (['/chat', '/chat/stream', '/chat/checklist'].includes(req.path)) {
+  if (['/chat', '/chat/stream'].includes(req.path)) {
     res.status(409).json(
       errorPayload(
         '챗봇 요청은 저장을 위해 product API를 통해 호출해야 합니다.',
