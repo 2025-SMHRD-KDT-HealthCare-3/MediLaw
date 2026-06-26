@@ -100,8 +100,12 @@ CLASSIFIER_SYSTEM = (
 )
 
 
-def llm_classify(question: str, history: list[dict] | None = None) -> tuple[int, bool]:
-    """모호한 질문만 제약 LLM으로 분류. 실패 시 (2, True) — 핵심으로 보고 되묻기(안전)."""
+def llm_classify(question: str, history: list[dict] | None = None) -> tuple[int, bool, bool]:
+    """모호한 질문만 제약 LLM으로 분류. 반환 (tier, needs_clarification, ok).
+
+    ok=False 는 분류 실패(LLM 장애·JSON 오류 등) — 이땐 답변을 강행하지 말고 호출자가
+    '한 번 더 묻기'(clarify_only)로 처리한다. (과거엔 (2,True)로 무조건 답변 → over-accept)
+    """
     user = ""
     if history:
         convo = "\n".join(f"{t['role']}: {t['content']}" for t in history[-4:])
@@ -115,19 +119,22 @@ def llm_classify(question: str, history: list[dict] | None = None) -> tuple[int,
         tier = int(data.get("tier"))
         if tier not in (1, 2, 3):
             raise ValueError("tier out of range")
-        return tier, bool(data.get("needs_clarification", False))
-    except Exception:  # noqa: BLE001
-        return 2, True
+        return tier, bool(data.get("needs_clarification", False)), True
+    except Exception:  # noqa: BLE001 — 분류 실패 → clarify_only 로 되묻기
+        return 2, True, False
 
 
 # ── 4. 오케스트레이터 ─────────────────────────────────────────────────────────
 def route(question: str, history: list[dict] | None = None) -> dict:
-    """{tier, needs_clarification, source('rule'|'llm')}. 규칙으로 끝나면 LLM 호출 0."""
+    """{tier, needs_clarification, source('rule'|'llm'), clarify_only}. 규칙으로 끝나면 LLM 0회.
+
+    clarify_only=True 면 분류를 못한 것(LLM 장애 등) → 답변 대신 한 번 더 되묻는다.
+    """
     t = rule_based_route(question, has_history=bool(history))
     if t is not None:
-        return {"tier": t, "needs_clarification": False, "source": "rule"}
-    tier, needs = llm_classify(question, history)
-    return {"tier": tier, "needs_clarification": needs, "source": "llm"}
+        return {"tier": t, "needs_clarification": False, "source": "rule", "clarify_only": False}
+    tier, needs, ok = llm_classify(question, history)
+    return {"tier": tier, "needs_clarification": needs, "source": "llm", "clarify_only": not ok}
 
 
 def is_in_scope(decision: dict) -> bool:

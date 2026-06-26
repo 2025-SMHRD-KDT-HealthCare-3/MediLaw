@@ -103,6 +103,19 @@ _CLARIFY = "\n\n※ 의료기관·환자·건강정보와 관련된 상황이라
 _CLARIFY_EN = ("\n\n* If this concerns a medical institution, patients, or health data, "
                "please specify for a more precise answer.")
 
+# 분류 불가(LLM 장애 등)로 답변을 강행하지 않고 '한 번 더 묻는' 단독 응답.
+_CLARIFY_ONLY = (
+    "질문 의도를 정확히 파악하지 못했습니다. 의료기관·환자·건강정보, 또는 개인정보·의료광고 등 "
+    "어떤 상황에 대한 질문인지 조금만 더 구체적으로 알려주시면 정확히 답변드리겠습니다.\n"
+    "※ 본 답변은 법률 자문이 아니라 정보 제공입니다."
+)
+_CLARIFY_ONLY_EN = (
+    "I couldn't quite determine the intent of your question. Could you specify the situation "
+    "(e.g., a medical institution, patient/health data, privacy, or medical advertising)? "
+    "I'll then answer precisely.\n"
+    "* This response is informational, not legal advice."
+)
+
 
 def _domain_route(req: ChatRequest) -> dict:
     """3-tier 도메인 라우팅. {tier, needs_clarification, source}."""
@@ -179,6 +192,12 @@ def chat(req: ChatRequest):
                             sources=[], method="none", lang=lang,
                             search_query=req.question,
                             citation_check=_citation_check("", req.as_of), as_of=req.as_of)
+    if decision.get("clarify_only"):  # 분류 불가 → 답변 강행 대신 한 번 더 묻기
+        msg = _CLARIFY_ONLY_EN if lang == "en" else _CLARIFY_ONLY
+        return ChatResponse(answer=msg, answer_segments=segment_answer(msg, []),
+                            sources=[], method="none", lang=lang,
+                            search_query=req.question,
+                            citation_check=_citation_check("", req.as_of), as_of=req.as_of)
     messages, sources, method, lang, search_q = _build(req)
     no_ev = _NO_EVIDENCE_EN if lang == "en" else _NO_EVIDENCE
     if messages is None:
@@ -220,6 +239,18 @@ def chat_stream(req: ChatRequest):
                         "answer_segments": [s.model_dump() for s in segment_answer(refusal, [])]})
 
         return StreamingResponse(gen_refuse(), media_type="text/event-stream")
+
+    if decision.get("clarify_only"):  # 분류 불가 → 답변 강행 대신 한 번 더 묻기
+        msg = _CLARIFY_ONLY_EN if lang == "en" else _CLARIFY_ONLY
+
+        def gen_clarify():
+            yield _sse({"type": "sources", "method": "none", "lang": lang,
+                        "search_query": req.question, "sources": []})
+            yield _sse({"type": "token", "text": msg})
+            yield _sse({"type": "done", "citation_check": _citation_check("", req.as_of).model_dump(),
+                        "answer_segments": [s.model_dump() for s in segment_answer(msg, [])]})
+
+        return StreamingResponse(gen_clarify(), media_type="text/event-stream")
 
     def gen():
         # _build(검색·질의재작성·DB)도 제너레이터 안에서 감싸, 여기서 터져도 스트림이
