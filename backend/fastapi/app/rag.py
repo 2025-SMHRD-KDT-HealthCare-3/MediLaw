@@ -409,13 +409,16 @@ def search_statutes(q: str = "", kind: str = "", trust_grade: str = "",
     """법령/행정규칙 검색 (조문 FTS → 법령 단위). 라우터·MCP 공용."""
     conn = db()
     params: list = []
-    if q:
+    # q에 유효 토큰이 없으면(특수문자·1글자 등) FTS MATCH 빈식 → SQLite 오류(500).
+    # fts_search와 동일하게 빈 식이면 FTS 분기를 타지 않고 전체(필터만) 검색으로 폴백.
+    expr = _fts_match_expr(q) if q else ""
+    if expr:
         sql = """SELECT DISTINCT s.id, s.law_id, s.name, s.kind, s.trust_grade,
                         s.effective_from, s.source_url
                  FROM articles_fts f JOIN articles a ON a.id = f.rowid
                  JOIN statutes s ON s.id = a.statute_id
                  WHERE articles_fts MATCH ?"""
-        params.append(_fts_match_expr(q))
+        params.append(expr)
         alias = "s."
     else:
         sql = """SELECT id, law_id, name, kind, trust_grade, effective_from, source_url

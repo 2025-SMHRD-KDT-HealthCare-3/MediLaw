@@ -38,7 +38,10 @@ async def review(
     pdf_bytes = None
     if file is not None:
         pdf_bytes = await file.read()
-    elif not text:
+        if not pdf_bytes:
+            raise HTTPException(400, "업로드한 PDF 파일이 비어 있습니다.")
+        text = None  # file 우선 — text는 무시(둘 다 줘도 PDF 사용, 묵음 처리 방지)
+    elif not (text and text.strip()):
         raise HTTPException(400, "file(PDF) 또는 text 중 하나를 제공하세요.")
     top_k = max(1, min(8, top_k_per_segment))
     try:

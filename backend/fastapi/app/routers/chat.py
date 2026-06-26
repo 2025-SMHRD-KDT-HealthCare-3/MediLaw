@@ -169,6 +169,8 @@ def _citation_check(answer: str, as_of) -> VerifyResponse:
 
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
 def chat(req: ChatRequest):
+    if not req.question.strip():
+        raise HTTPException(400, "질문을 입력해주세요.")
     lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
     decision = _domain_route(req)
     if not domain_router.is_in_scope(decision):  # Tier 3 → 거절
@@ -203,6 +205,8 @@ def _sse(obj: dict) -> str:
 
 @router.post("/chat/stream", dependencies=[Depends(require_api_key)])
 def chat_stream(req: ChatRequest):
+    if not req.question.strip():
+        raise HTTPException(400, "질문을 입력해주세요.")
     lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
     decision = _domain_route(req)
     if not domain_router.is_in_scope(decision):  # Tier 3 → 거절
@@ -217,9 +221,16 @@ def chat_stream(req: ChatRequest):
 
         return StreamingResponse(gen_refuse(), media_type="text/event-stream")
 
-    messages, sources, method, lang, search_q = _build(req)
-
     def gen():
+        # _build(검색·질의재작성·DB)도 제너레이터 안에서 감싸, 여기서 터져도 스트림이
+        # error+done 없이 끊기지 않게 한다(프론트 로딩 hang 방지).
+        try:
+            messages, sources, method, lang, search_q = _build(req)
+        except Exception as e:  # noqa: BLE001
+            yield _sse({"type": "error", "message": f"근거 준비 중 오류: {e}"})
+            yield _sse({"type": "done", "citation_check": _citation_check("", req.as_of).model_dump(),
+                        "answer_segments": []})
+            return
         yield _sse({"type": "sources", "method": method, "lang": lang, "search_query": search_q,
                     "sources": [s.model_dump() for s in sources]})
         if messages is None:
