@@ -180,3 +180,13 @@ def get_ai_ad_copy(
 ):
     ai_copy = ai_ad_copy_service.get_ai_ad_copy(db, ai_copy_id, current_user)
     return success_response(_ai_copy_payload(ai_copy))
+
+
+@router.delete("/{ai_copy_id}")
+def delete_ai_ad_copy(
+    ai_copy_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = ai_ad_copy_service.delete_ai_ad_copy(db, ai_copy_id, current_user)
+    return success_response(result, message="ai ad copy deleted")

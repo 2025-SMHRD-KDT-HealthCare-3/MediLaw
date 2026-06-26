@@ -46,6 +46,51 @@ def test_ad_review_returns_structured_ai_copy(client, mock_hms):
     assert ai_copy["checklist_summary"] == {"total": 0}
 
 
+def test_ai_ad_copy_delete_removes_user_history(client, mock_hms):
+    token = signup_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_response = client.post(
+        "/api/ai-ad-copies",
+        json={"input_language": "ko", "input_text": "부작용 없는 시술입니다"},
+        headers=headers,
+    )
+    assert create_response.status_code == 200
+    ai_copy_id = create_response.json()["data"]["ai_copy_id"]
+
+    delete_response = client.delete(f"/api/ai-ad-copies/{ai_copy_id}", headers=headers)
+    assert delete_response.status_code == 200
+    assert delete_response.json()["message"] == "ai ad copy deleted"
+    assert delete_response.json()["data"] == {"ai_copy_id": ai_copy_id, "deleted": True}
+
+    get_response = client.get(f"/api/ai-ad-copies/{ai_copy_id}", headers=headers)
+    assert get_response.status_code == 404
+
+    list_response = client.get("/api/ai-ad-copies", headers=headers)
+    assert list_response.status_code == 200
+    assert list_response.json()["data"] == []
+
+
+def test_ai_ad_copy_delete_rejects_other_user(client, mock_hms):
+    owner_token = signup_and_login(client, login_id="owner")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    create_response = client.post(
+        "/api/ai-ad-copies",
+        json={"input_language": "ko", "input_text": "부작용 없는 시술입니다"},
+        headers=owner_headers,
+    )
+    assert create_response.status_code == 200
+    ai_copy_id = create_response.json()["data"]["ai_copy_id"]
+
+    other_token = signup_and_login(client, login_id="other")
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+    delete_response = client.delete(f"/api/ai-ad-copies/{ai_copy_id}", headers=other_headers)
+    assert delete_response.status_code == 403
+
+    owner_get_response = client.get(f"/api/ai-ad-copies/{ai_copy_id}", headers=owner_headers)
+    assert owner_get_response.status_code == 200
+
+
 def test_ad_review_checks_room_before_hms_call(client, monkeypatch):
     token = signup_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}

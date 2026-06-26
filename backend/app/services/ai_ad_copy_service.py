@@ -231,3 +231,19 @@ def get_ai_ad_copy(db: Session, ai_copy_id: int, current_user: User):
     if current_user.role != "ADMIN" and ai_copy.user_id != current_user.user_id:
         raise ForbiddenError("ai ad copy access denied")
     return ai_copy
+
+
+def delete_ai_ad_copy(db: Session, ai_copy_id: int, current_user: User) -> dict:
+    ai_copy = get_ai_ad_copy(db, ai_copy_id, current_user)
+    try:
+        ai_ad_copy_repository.delete(db, ai_copy)
+        db.commit()
+        return {"ai_copy_id": ai_copy_id, "deleted": True}
+    except Exception:
+        logger.exception(
+            "ai ad copy delete failed ai_copy_id=%s user_id=%s",
+            ai_copy_id,
+            current_user.user_id,
+        )
+        db.rollback()
+        raise
