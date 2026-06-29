@@ -157,6 +157,13 @@ def main():
 
     import struct
 
+    # slim DB(슬림화로 chunks.embedding 컬럼 제거, chunk_vec만 사용) 호환:
+    # embedding 컬럼이 있으면 BLOB도 채우고, 없으면 chunk_vec에만 벡터 저장.
+    has_embed_col = any(r[1] == "embedding" for r in conn.execute("PRAGMA table_info(chunks)"))
+    if not has_embed_col and not vec_ok:
+        sys.exit("slim DB인데 sqlite-vec(chunk_vec) 미사용 → 벡터를 저장할 곳이 없음. "
+                 "sqlite-vec 설치 후 재실행하세요.")
+
     done = 0
     for i in range(0, len(rows), BATCH):
         batch = rows[i : i + BATCH]
@@ -175,11 +182,17 @@ def main():
             sys.exit("임베딩 호출 반복 실패")
 
         for (stype, sid, label, content), d in zip(batch, resp.data):
-            blob = struct.pack(f"{EMBED_DIM}f", *d.embedding)
-            cur = conn.execute(
-                "INSERT INTO chunks(source_type, source_id, label, content, embedding) VALUES(?,?,?,?,?)",
-                (stype, sid, label, content[:2000], blob),
-            )
+            if has_embed_col:
+                blob = struct.pack(f"{EMBED_DIM}f", *d.embedding)
+                cur = conn.execute(
+                    "INSERT INTO chunks(source_type, source_id, label, content, embedding) VALUES(?,?,?,?,?)",
+                    (stype, sid, label, content[:2000], blob),
+                )
+            else:  # slim DB — embedding 컬럼 없음. 벡터는 chunk_vec에만.
+                cur = conn.execute(
+                    "INSERT INTO chunks(source_type, source_id, label, content) VALUES(?,?,?,?)",
+                    (stype, sid, label, content[:2000]),
+                )
             if vec_ok:
                 import sqlite_vec
 

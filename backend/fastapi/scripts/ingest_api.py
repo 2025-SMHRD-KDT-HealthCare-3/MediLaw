@@ -46,9 +46,19 @@ BASE_LAWS = [
 VARIANTS = ["", " 시행령", " 시행규칙"]
 
 # 판례 검색 기본 질의(의료 도메인). --query 로 단일 지정 가능.
+# 의료법은 이미 충분(1.7k+)이라, 약한 3개 법령(개인정보·정보통신망·생명윤리)을 두텁게 보강.
 PREC_QUERIES = [
-    "의료법", "무면허 의료행위", "의료광고", "진료기록", "의료과실",
-    "개인정보 유출", "민감정보", "생명윤리", "정보통신망",
+    # 의료법
+    "의료법", "무면허 의료행위", "의료광고", "진료기록", "의료과실", "비급여", "리베이트",
+    # 개인정보 보호법
+    "개인정보 보호법", "개인정보 유출", "민감정보", "가명정보", "정보주체", "주민등록번호",
+    "개인정보 동의", "고유식별정보",
+    # 정보통신망법
+    "정보통신망법", "정보통신망 이용촉진", "스팸", "악성프로그램", "정보통신서비스",
+    "정보통신망 명예훼손",
+    # 생명윤리법(가장 빈약 → 관련어 최대한)
+    "생명윤리", "생명윤리 및 안전에 관한 법률", "인간대상연구", "배아", "줄기세포",
+    "유전자검사", "유전정보", "연명의료", "장기이식", "인체유래물",
 ]
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -272,8 +282,10 @@ def ingest_prec(conn, queries, max_n):
 
 # ===================== documents (해석례 expc / 결정문 ppc) =====================
 # 법령도 판례도 아닌 문서 → 별도 테이블. source_type: interpretation(해석례)/decision(결정문)
-DOMAIN_QUERIES = ["의료법", "개인정보", "민감정보", "생명윤리", "정보통신망", "의료광고", "진료기록"]
-PPC_QUERIES = ["개인정보", "민감정보", "건강정보", "진료기록", "가명정보"]
+DOMAIN_QUERIES = ["의료법", "의료광고", "진료기록", "비대면진료", "개인정보", "민감정보",
+                  "건강정보", "생명윤리", "인간대상연구", "정보통신망"]
+PPC_QUERIES = ["개인정보", "민감정보", "건강정보", "진료기록", "가명정보", "영상정보",
+               "주민등록번호", "마케팅 동의"]
 
 
 def ensure_documents(conn):
@@ -298,17 +310,60 @@ def _doc_exists(conn, doc_type, uid):
     ).fetchone() is not None
 
 
+def _find_search_items(d, root_key, item_key, target):
+    """DRF 검색 응답에서 항목 리스트를 관용적으로 추출.
+
+    루트 키가 'Expc'인지 'ExpcSearch'인지 환경마다 다를 수 있어, 후보 키를 순서대로
+    시도하고 그래도 없으면 구조(단일 dict 루트 안의 단일 list)로 폴백한다.
+    → 키 이름 추정이 틀려도 데이터가 있으면 잡아낸다.
+    """
+    if not isinstance(d, dict):
+        return []
+    cap = target[:1].upper() + target[1:]
+    root_cands = [root_key, f"{target}Search", f"{cap}Search", f"{target.upper()}Search", cap]
+    item_cands = [item_key, target, target.lower(), cap]
+    tried = set()
+    for rk in root_cands:
+        if rk in tried:
+            continue
+        tried.add(rk)
+        sub = d.get(rk)
+        if isinstance(sub, dict):
+            for ik in item_cands:
+                if sub.get(ik):
+                    return as_list(sub.get(ik))
+    # 폴백: top-level dict 루트가 하나뿐이고 그 안에 리스트가 하나면 그걸 항목으로.
+    dict_roots = [v for v in d.values() if isinstance(v, dict)]
+    if len(dict_roots) == 1:
+        lists = [v for v in dict_roots[0].values() if isinstance(v, list)]
+        if len(lists) == 1:
+            return lists[0]
+    return []
+
+
+def _item_uid(it, uid_key):
+    """검색 항목에서 일련번호(uid)를 관용적으로 추출(키 이름 변형 대응)."""
+    if not isinstance(it, dict):
+        return None
+    if it.get(uid_key):
+        return str(it[uid_key])
+    for k, v in it.items():
+        if v and ("일련번호" in k or "Seq" in k or k.lower().endswith("id")):
+            return str(v)
+    return None
+
+
 def _search_uids(target, root_key, item_key, uid_key, query, max_n):
     uids, page = [], 1
     while len(uids) < max_n:
         d = call("lawSearch.do", target=target, query=query, display=100, page=page)
-        items = as_list(d.get(root_key, {}).get(item_key, []))
+        items = _find_search_items(d, root_key, item_key, target)
         if not items:
             break
         for it in items:
-            u = it.get(uid_key)
+            u = _item_uid(it, uid_key)
             if u:
-                uids.append(str(u))
+                uids.append(u)
         if len(items) < 100:
             break
         page += 1
@@ -349,29 +404,58 @@ def _ingest_documents(conn, doc_type, target, root, uid_key, extract, queries, m
     print(f"=== {label} 신규: {added:,}건 (총 documents {conn.execute('SELECT COUNT(*) FROM documents').fetchone()[0]:,}) ===")
 
 
+def _detail_root(det, candidates):
+    """상세 응답에서 서비스 dict를 관용적으로 찾는다(키 이름 변형 대응).
+    후보 키에 없으면 top-level dict 루트가 하나뿐일 때 그걸 채택."""
+    if not isinstance(det, dict):
+        return {}
+    for c in candidates:
+        v = det.get(c)
+        if isinstance(v, dict) and v:
+            return v
+    dicts = [v for v in det.values() if isinstance(v, dict) and v]
+    return dicts[0] if len(dicts) == 1 else {}
+
+
+def _first(d, keys):
+    for k in keys:
+        v = strip_html(d.get(k, ""))
+        if v:
+            return v
+    return ""
+
+
+def _body_from(d, keys):
+    """본문 후보 키들을 합치고, 전부 비면 dict의 긴 문자열 값으로 폴백(키 이름 달라도 본문 확보)."""
+    body = "\n".join(p for p in (strip_html(d.get(k, "")) for k in keys) if p)
+    if body:
+        return body
+    longs = [strip_html(v) for v in d.values() if isinstance(v, str) and len(v) > 40]
+    return "\n".join(longs[:6])
+
+
 def _expc_extract(det, uid):
-    b = det.get("ExpcService", {})
-    if not isinstance(b, dict) or not b:
+    b = _detail_root(det, ["ExpcService", "Expc", "법령해석례", "법령해석"])
+    if not b:
         return None
-    body = "\n".join(filter(None, [
-        strip_html(b.get("질의요지", "")), strip_html(b.get("회답", "")), strip_html(b.get("이유", "")),
-    ]))
-    return (strip_html(b.get("안건명", "")), strip_html(b.get("해석기관명", "")),
-            norm_date(b.get("해석일자", "")), body,
-            f"https://www.law.go.kr/법령해석례/({uid})")
+    body = _body_from(b, ["질의요지", "회답", "이유", "해석례내용", "해석내용"])
+    return (_first(b, ["안건명", "법령해석례명", "제목", "질의제목"]),
+            _first(b, ["해석기관명", "회신기관명", "기관명", "소관부처명"]),
+            norm_date(b.get("해석일자") or b.get("회신일자") or b.get("등록일자", "")),
+            body, f"https://www.law.go.kr/법령해석례/({uid})")
 
 
 def _ppc_extract(det, uid):
-    b = det.get("PpcService", {}).get("의결서", {})
-    if not isinstance(b, dict) or not b:
+    svc = _detail_root(det, ["PpcService", "Ppc", "결정문"])
+    if not svc:
         return None
-    body = "\n".join(filter(None, [
-        strip_html(b.get("결정요지", "")), strip_html(b.get("주문", "")),
-        strip_html(b.get("주요내용", "")), strip_html(b.get("이유", "")),
-    ]))
-    return (strip_html(b.get("안건명", "")), strip_html(b.get("기관명", "")),
-            norm_date(b.get("의결일자") or b.get("의결연월일", "")), body,
-            f"https://www.law.go.kr/LSW/ppcDecInfoP.do?ppcSeq={uid}")
+    # '의결서' 중첩이 있으면 그 안을, 없으면 svc 자체를 본문 소스로(중첩 유무 자동대응).
+    b = svc.get("의결서") if isinstance(svc.get("의결서"), dict) and svc.get("의결서") else svc
+    body = _body_from(b, ["결정요지", "주문", "주요내용", "이유", "결정내용", "의결내용"])
+    return (_first(b, ["안건명", "제목", "사건명"]) or _first(svc, ["안건명", "제목"]),
+            _first(b, ["기관명", "의결기관", "처분기관"]) or "개인정보보호위원회",
+            norm_date(b.get("의결일자") or b.get("의결연월일") or b.get("결정일자", "")),
+            body, f"https://www.law.go.kr/LSW/ppcDecInfoP.do?ppcSeq={uid}")
 
 
 def ingest_expc(conn, queries, max_n):
@@ -462,16 +546,24 @@ def main():
     q = [args.query] if args.query else None
     t = args.target
     conn = sqlite3.connect(args.db)
+
+    def run(label, fn):
+        # 한 target 실패(OC 미등록 HTML·네트워크 등)가 나머지 target을 죽이지 않게 격리.
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            print(f"  ⚠️ [{label}] 중단: {type(e).__name__}: {e} → 다음 target 계속")
+
     if t in ("law", "all"):
-        ingest_laws(conn)
+        run("law", lambda: ingest_laws(conn))
     if t in ("prec", "all"):
-        ingest_prec(conn, q or PREC_QUERIES, args.max)
+        run("prec", lambda: ingest_prec(conn, q or PREC_QUERIES, args.max))
     if t in ("expc", "all"):
-        ingest_expc(conn, q or DOMAIN_QUERIES, args.max)
+        run("expc", lambda: ingest_expc(conn, q or DOMAIN_QUERIES, args.max))
     if t in ("admrul", "all"):
-        ingest_admrul(conn, q or DOMAIN_QUERIES, args.max)
+        run("admrul", lambda: ingest_admrul(conn, q or DOMAIN_QUERIES, args.max))
     if t in ("ppc", "all"):
-        ingest_ppc(conn, q or PPC_QUERIES, args.max)
+        run("ppc", lambda: ingest_ppc(conn, q or PPC_QUERIES, args.max))
     conn.close()
     print("\n다음: 새 데이터 임베딩 →  python scripts/build_embeddings.py  (MODE=incremental 기본)")
 
