@@ -1,4 +1,5 @@
-from typing import Literal
+import json
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.encoders import jsonable_encoder
@@ -18,6 +19,56 @@ from app.utils.validators import validate_file_reference
 router = APIRouter(prefix="/ai-ad-copies", tags=["ai-ad-copies"])
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_array(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _ai_copy_payload(ai_copy) -> dict[str, Any]:
+    payload = jsonable_encoder(AiAdCopyResponse.model_validate(ai_copy))
+    legal_basis = _json_object(payload.get("legal_basis"))
+
+    findings = legal_basis.get("findings")
+    if not isinstance(findings, list):
+        findings = _json_array(payload.get("risky_expression"))
+
+    checklist = legal_basis.get("checklist")
+    if not isinstance(checklist, list):
+        checklist = []
+
+    checklist_summary = legal_basis.get("checklist_summary")
+    citation_check = legal_basis.get("citation_check")
+
+    payload.update(
+        {
+            "findings": findings,
+            "checklist": checklist,
+            "checklist_summary": checklist_summary if isinstance(checklist_summary, dict) else None,
+            "citation_check": citation_check if isinstance(citation_check, dict) else None,
+        }
+    )
+    return payload
 
 
 def _upload_size(file: UploadFile) -> int | None:
@@ -40,7 +91,7 @@ def create_ai_ad_copy(
     current_user: User = Depends(get_current_user),
 ):
     ai_copy = ai_ad_copy_service.analyze_and_create(db, current_user, data)
-    return success_response(jsonable_encoder(AiAdCopyResponse.model_validate(ai_copy)))
+    return success_response(_ai_copy_payload(ai_copy))
 
 
 @router.post("/ad-review")
@@ -86,7 +137,7 @@ def review_ad_copy(
         room_id=room_id,
     )
     payload = {
-        "ai_copy": AiAdCopyResponse.model_validate(result["ai_copy"]),
+        "ai_copy": _ai_copy_payload(result["ai_copy"]),
         "question_chat": (
             ChatResponse.model_validate(result["question_chat"])
             if result["question_chat"] is not None
@@ -117,7 +168,7 @@ def list_ai_ad_copies(
         db, current_user, skip=skip, limit=limit
     )
     return success_response(
-        jsonable_encoder([AiAdCopyResponse.model_validate(item) for item in ai_copies])
+        [_ai_copy_payload(item) for item in ai_copies]
     )
 
 
@@ -128,4 +179,14 @@ def get_ai_ad_copy(
     current_user: User = Depends(get_current_user),
 ):
     ai_copy = ai_ad_copy_service.get_ai_ad_copy(db, ai_copy_id, current_user)
-    return success_response(jsonable_encoder(AiAdCopyResponse.model_validate(ai_copy)))
+    return success_response(_ai_copy_payload(ai_copy))
+
+
+@router.delete("/{ai_copy_id}")
+def delete_ai_ad_copy(
+    ai_copy_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = ai_ad_copy_service.delete_ai_ad_copy(db, ai_copy_id, current_user)
+    return success_response(result, message="ai ad copy deleted")

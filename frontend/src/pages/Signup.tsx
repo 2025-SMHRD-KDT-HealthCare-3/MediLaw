@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, type RefObject } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { signup } from '../api/auth'
 
@@ -47,7 +47,7 @@ export default function Signup() {
   const navigate = useNavigate()
 
   // 각 칸 포커스 이동용 ref
-  const refs: Record<string, React.RefObject<HTMLInputElement>> = {
+  const refs: Record<string, RefObject<HTMLInputElement | null>> = {
     login_id: useRef<HTMLInputElement>(null),
     password: useRef<HTMLInputElement>(null),
     passwordConfirm: useRef<HTMLInputElement>(null),

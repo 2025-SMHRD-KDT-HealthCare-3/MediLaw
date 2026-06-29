@@ -111,6 +111,20 @@ const upstreamErrorCode = (err: unknown) => {
   return 'ERROR'
 }
 
+const upstreamUnavailableCodes = new Set([
+  'ECONNREFUSED',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ECONNRESET',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+])
+
+const isUpstreamUnavailable = (code: string) => upstreamUnavailableCodes.has(code)
+
+const upstreamServiceLabel = (req: IncomingMessage) =>
+  req.url?.startsWith('/api/rag') ? 'HMS/RAG' : '백엔드'
+
 const isMutatingMethod = (method: string) => !['GET', 'HEAD', 'OPTIONS'].includes(method)
 
 const requestOrigin = (req: Request) => {
@@ -160,9 +174,14 @@ const proxyErrorHandler = (err: unknown, req: IncomingMessage, res: ProxyErrorRe
   console.error('[proxy-error]', errorCode, req.url)
   if (hasHeadersSent(res)) return
 
-  const statusCode = errorCode === 'ECONNREFUSED' ? 503 : 504
+  const statusCode = isUpstreamUnavailable(errorCode) ? 503 : 504
+  const serviceLabel = upstreamServiceLabel(req)
+  const message =
+    errorCode === 'TIMEOUT'
+      ? `${serviceLabel} 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도하세요.`
+      : `${serviceLabel} 서버에 연결할 수 없습니다. 서비스가 실행 중인지 확인하세요.`
   const payload = errorPayload(
-    '백엔드 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.',
+    message,
     `UPSTREAM_${errorCode}`,
   )
 
@@ -254,7 +273,7 @@ app.post('/api/auth/login', authLoginLimiter, express.json(), async (req, res) =
   } catch (err: unknown) {
     const errorCode = upstreamErrorCode(err)
     console.error('[auth-login-error]', errorCode, errorField(err, 'message'))
-    res.status(errorCode === 'ECONNREFUSED' ? 503 : 504).json({
+    res.status(isUpstreamUnavailable(errorCode) ? 503 : 504).json({
       ...errorPayload(
         '로그인 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도하세요.',
         `UPSTREAM_${errorCode}`,
@@ -290,7 +309,7 @@ app.use(
 )
 
 app.use('/api/rag', (req, res, next) => {
-  if (['/chat', '/chat/stream', '/chat/checklist'].includes(req.path)) {
+  if (['/chat', '/chat/stream'].includes(req.path)) {
     res.status(409).json(
       errorPayload(
         '챗봇 요청은 저장을 위해 product API를 통해 호출해야 합니다.',

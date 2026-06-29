@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from 'react'
-import { getRooms, getAdReviews, deleteRoom } from '../api/chat'
+import { getRooms, getAdReviews, deleteRoom, deleteAdCopy } from '../api/chat'
 import RoomDetailModal from '../components/RoomDetailModal'
 
 interface Room {
@@ -51,6 +51,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null)
   const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [deletingAdId, setDeletingAdId] = useState<number | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -87,6 +88,22 @@ export default function Dashboard() {
       alert('삭제에 실패했어요. 잠시 후 다시 시도해주세요.')
     } finally {
       setDeletingId(null)
+    }
+  }
+
+  // 광고문구 검토 이력 삭제
+  const handleDeleteAd = async (e: React.MouseEvent, ad: AdReview) => {
+    e.stopPropagation()
+    if (!window.confirm('이 광고문구 검토 이력을 삭제할까요?')) return
+    setDeletingAdId(ad.ai_copy_id)
+    try {
+      await deleteAdCopy(ad.ai_copy_id)
+      setAds((prev) => prev.filter((a) => a.ai_copy_id !== ad.ai_copy_id))
+    } catch (err) {
+      console.error('광고문구 삭제 실패:', err)
+      alert('삭제에 실패했어요. 잠시 후 다시 시도해주세요.')
+    } finally {
+      setDeletingAdId(null)
     }
   }
 
@@ -146,15 +163,28 @@ export default function Dashboard() {
                 {ads.map((a) => {
                   const s = AD_STYLE[a.status]
                   return (
-                    <div key={a.ai_copy_id} className="flex items-center justify-between border-b border-gray-100 pb-3 last:border-0">
+                    <div
+                      key={a.ai_copy_id}
+                      className="group flex items-center justify-between border-b border-gray-100 pb-3 transition-colors last:border-0 hover:bg-gray-50"
+                    >
                       <div className="min-w-0 flex-1 pr-3">
                         <p className="truncate text-sm font-medium text-slate-800">"{a.input_text ?? '-'}"</p>
                         <p className="text-xs text-slate-400">{fmtDate(a.created_at)}</p>
                       </div>
-                      <span className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                        style={{ color: s.color, backgroundColor: `${s.color}1A` }}>
-                        ● {s.label}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
+                          style={{ color: s.color, backgroundColor: `${s.color}1A` }}>
+                          ● {s.label}
+                        </span>
+                        <button
+                          onClick={(e) => handleDeleteAd(e, a)}
+                          disabled={deletingAdId === a.ai_copy_id}
+                          title="삭제"
+                          className="shrink-0 rounded-md px-2 py-1 text-sm text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 disabled:opacity-50"
+                        >
+                          ✕
+                        </button>
+                      </div>
                     </div>
                   )
                 })}
