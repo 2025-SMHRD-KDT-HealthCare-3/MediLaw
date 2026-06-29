@@ -7,6 +7,7 @@ POST /chat/stream   : SSE 토큰 스트리밍 (sources → token... → done)
 """
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -424,11 +425,27 @@ def _derive_queries(convo: str, max_n: int) -> list[str]:
 
 
 def _gather_for_queries(queries: list[str], top_k: int, as_of, lang: str):
-    """쟁점 질의들로 검색 → (전역번호 ChatSource 목록, n→source 맵, method). 출처 dedup."""
+    """쟁점 질의들로 검색 → (전역번호 ChatSource 목록, n→source 맵, method). 출처 dedup.
+
+    쟁점별 검색을 **병렬**로 돌린다(thread-local DB라 스레드 안전). 순차로 하면
+    검색 1회가 느린 환경에서 N배로 누적돼 체크리스트가 타임아웃나기 때문.
+    결과는 입력 질의 순서대로 병합(ex.map 순서 보존)해 dedup·번호 부여는 결정론 유지.
+    """
+    def _search(q):
+        try:
+            return hybrid_search(q, None, top_k=top_k, as_of=as_of)
+        except Exception:  # noqa: BLE001 — 한 질의 실패가 전체를 막지 않게
+            return [], "fts"
+
+    if len(queries) <= 1:
+        results = [_search(q) for q in queries]
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(queries))) as ex:
+            results = list(ex.map(_search, queries))  # 입력 순서 보존
+
     by_key: dict[tuple[str, int], ChatSource] = {}
     method = "fts"
-    for q in queries:
-        hits, m = hybrid_search(q, None, top_k=top_k, as_of=as_of)
+    for hits, m in results:
         if m == "hybrid":
             method = "hybrid"
         for h in hits:

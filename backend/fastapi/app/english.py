@@ -35,8 +35,13 @@ def english_article(source_id: int):
     ).fetchone()
     if not ko:
         return None
-    return db().execute(
-        """SELECT law_name_en, article_no, title_en, body_en, eng_effective
-           FROM articles_en WHERE law_name_ko = ? AND article_no = ? LIMIT 1""",
-        (ko["law_ko"], ko["article_no"]),
-    ).fetchone()
+    try:
+        return db().execute(
+            """SELECT law_name_en, article_no, title_en, body_en, eng_effective
+               FROM articles_en WHERE law_name_ko = ? AND article_no = ? LIMIT 1""",
+            (ko["law_ko"], ko["article_no"]),
+        ).fetchone()
+    except Exception:
+        # articles_en 표 자체가 없는 DB(ingest_elaw 미적재)면 공식 영문 없음 →
+        # None 반환 → 호출부가 LLM 비공식 번역으로 폴백(500 방지).
+        return None
