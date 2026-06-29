@@ -22,21 +22,34 @@ DOCTYPE_KEYWORDS: dict[str, list[str]] = {
     "privacy_policy": [
         "개인정보 처리방침", "개인정보처리방침", "처리방침", "개인정보 보호책임자",
         "개인정보보호책임자", "처리하는 개인정보의 항목",
+        # 영어 신호(영어 문서 분류용) — 한국어 문서엔 안 나타나므로 한국어 분류엔 영향 없음.
+        "privacy policy", "data protection officer", "retention period",
+        "personal data we collect", "how we use your data",
     ],
     "consent": [
         "수집·이용 동의", "수집ㆍ이용 동의", "수집 및 이용 동의", "제3자 제공 동의",
         "민감정보 동의", "민감정보 처리 동의", "고유식별정보", "동의서", "동의합니다",
         "동의하지 않을 권리", "위 내용에 동의",
+        # 영어 신호 — 동의 양식.
+        "consent form", "i consent", "i agree", "collection and use",
+        "sensitive information consent", "right to refuse consent",
     ],
     "terms": [
         "이용약관", "약관", "제1조", "제 1 조", "회원", "이용계약", "서비스 이용",
         "회원가입", "계약의 성립",
+        # 영어 신호 — 약관/계약.
+        "terms of service", "terms and conditions", "terms of use", "user agreement",
+        "article 1", "membership",
     ],
     "ad": [
         "이벤트", "할인", "최초", "특가", "프로모션", "무료", "체험", "쿠폰",
         "사은품", "선착순", "혜택", "런칭", "오픈기념", "한정",
         # 치료경험담·과장 광고 신호 (후기형 의료광고가 'ad'로 분류되도록)
         "후기", "경험담", "완치", "보장",
+        # 영어 신호 — 마케팅/과장 광고.
+        "event", "discount", "sale", "promotion", "coupon", "limited-time",
+        "limited time", "free trial", "testimonial", "review", "guarantee",
+        "best", "only", "no.1", "#1",
     ],
 }
 
@@ -173,6 +186,11 @@ if __name__ == "__main__":
         ("수집·이용에 동의합니다 민감정보 동의", "consent"),
         ("이번 이벤트 국내 최초 무료 체험 특가", "ad"),
         ("이용약관 제1조 회원의 의무", "terms"),
+        # 영어 문서 분류 — 영어 신호로 올바르게 갈리는지.
+        ("Limited-time 50% discount event! Real patient review.", "ad"),
+        ("Privacy Policy. Retention period and data protection officer.", "privacy_policy"),
+        ("Terms of Service. Article 1. Membership.", "terms"),
+        ("Consent Form. I agree to the collection and use of my data.", "consent"),
     ]
     for t, exp in cases:
         got = classify_doctype(t)

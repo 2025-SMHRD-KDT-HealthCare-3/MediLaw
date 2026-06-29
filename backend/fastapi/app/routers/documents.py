@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.auth import require_api_key
-from app.pdf import geometry, routing
+from app.pdf import geometry, review, routing
 from app.pdf.extract_ocr import OCR_SCALE
 from app.pdf.pipeline import process_pdf
 from app.pdf.review_adapter import review_to_response
@@ -32,9 +32,16 @@ async def review(
     text: str | None = Form(default=None, description="PDF 대신 직접 입력하는 본문"),
     as_of: str | None = Form(default=None),
     top_k_per_segment: int = Form(default=4, description="세그먼트별 근거 검색 수(1~8)"),
-    lang: str = Form(default="auto", description="응답 언어 auto|ko|en"),
+    # 이 엔드포인트는 한국어 전용이다(검토 분석·교정 문구 모두 한국어).
+    # lang 폼 파라미터는 ReviewResponse.lang 라벨로만 쓰이며, 영어 문서 검토(교정문 영어)는
+    # 별도 엔드포인트 /documents/review/en · /documents/review/en/stream 으로 처리한다.
+    # (suggestion_lang 은 여기서 항상 기본 "ko" → 동작 기존과 완전히 동일.)
+    lang: str = Form(default="auto", description="응답 lang 라벨 auto|ko|en(검토 자체는 한국어 전용)"),
 ):
-    """PDF 업로드(file) 또는 텍스트(text)로 위험검토 → findings + before/after(전체 한 번에)."""
+    """PDF 업로드(file) 또는 텍스트(text)로 위험검토 → findings + before/after(전체 한 번에).
+
+    한국어 문서 전용. 영어 문서(교정문=영어)는 /documents/review/en 을 사용한다.
+    """
     pdf_bytes = None
     if file is not None:
         pdf_bytes = await file.read()
@@ -47,6 +54,40 @@ async def review(
     try:
         return review_to_response(
             pdf_bytes=pdf_bytes, text=text, as_of=as_of, top_k=top_k, lang=lang)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+# ───────────── 영어 문서 검토(단발) — 분석은 한국어, 교정문(suggestion)은 영어 ─────────────
+@router.post("/review/en", response_model=ReviewResponse,
+             dependencies=[Depends(require_api_key)])
+async def review_en(
+    file: UploadFile | None = File(default=None, description="검토할 영어 PDF 파일"),
+    text: str | None = Form(default=None, description="PDF 대신 직접 입력하는 영어 본문"),
+    as_of: str | None = Form(default=None),
+    top_k_per_segment: int = Form(default=4, description="세그먼트별 근거 검색 수(1~8)"),
+):
+    """영어 문서 전용 위험검토(단발).
+
+    한국어판 /documents/review 와 응답 계약(ReviewResponse)은 동일하다. 차이는:
+      - 입력이 영어 문서(PDF/텍스트)이고,
+      - 검토 분석(issue/reason/risk_level)은 한국어(한국 검토자용),
+      - suggestion(=after, 문서에 다시 넣을 교정 대안 문구)은 영어(영어 문서를 실제로 고치게).
+    즉 suggestion_lang="en" 으로 review_to_response 를 호출한다.
+    """
+    pdf_bytes = None
+    if file is not None:
+        pdf_bytes = await file.read()
+        if not pdf_bytes:
+            raise HTTPException(400, "업로드한 PDF 파일이 비어 있습니다.")
+        text = None  # file 우선 — text 무시(둘 다 줘도 PDF 사용)
+    elif not (text and text.strip()):
+        raise HTTPException(400, "file(PDF) 또는 text 중 하나를 제공하세요.")
+    top_k = max(1, min(8, top_k_per_segment))
+    try:
+        return review_to_response(
+            pdf_bytes=pdf_bytes, text=text, as_of=as_of, top_k=top_k,
+            lang="en", suggestion_lang="en")
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -85,12 +126,17 @@ def _page_findings(segments, block_by_id=None, page_sizes=None) -> list[dict]:
     return out
 
 
-def _stream_gen(pdf_bytes: bytes, as_of, top_k: int, pages: "list[int] | None" = None):
+def _stream_gen(pdf_bytes: bytes, as_of, top_k: int, pages: "list[int] | None" = None,
+                suggestion_lang: str = "ko"):
     """SSE 이벤트 제너레이터: pages → page(별 before/after) → done.
 
     페이지 단위로 추출→세그먼트→위험판정→치환을 돌려 완료되는 대로 흘려보낸다.
     제너레이터 전체를 try/except 로 감싸 루프 이전(route_pages/첫 yield) 단계에서
     예외가 나도 마지막에 반드시 error(+가능하면 done) 이벤트를 보장한다.
+
+    suggestion_lang: 페이지별 process_pdf→review_segments 가 내부 호출이라 인자로 못 넘긴다.
+        review.suggestion_lang_scope ContextVar 로 깔아 둔다("en"이면 교정문 영어, reason은
+        한국어). 기본 "ko"면 기존 동작 완전 동일.
     """
     risky_total = change_total = 0
     done_summary = None  # 정상 완료 시 done 이벤트 payload
@@ -107,8 +153,11 @@ def _stream_gen(pdf_bytes: bytes, as_of, top_k: int, pages: "list[int] | None" =
         for n, r in enumerate(routes, 1):
             try:
                 # route_hint 로 미리 구한 라우팅을 넘겨 페이지마다 PDF 전체 재파싱 방지.
-                res = process_pdf(pdf_bytes, as_of=as_of, top_k=top_k,
-                                  pages=[r.page], route_hint=routes)
+                # suggestion_lang 은 process_pdf 인자로 못 넘기므로 ContextVar(scope)로 전달.
+                # ("en"이면 교정문 영어, reason 한국어 / 기본 "ko"면 기존과 동일.)
+                with review.suggestion_lang_scope(suggestion_lang):
+                    res = process_pdf(pdf_bytes, as_of=as_of, top_k=top_k,
+                                      pages=[r.page], route_hint=routes)
                 segs = res["segments"]
                 rev = res["revisions"]
                 block_by_id = {b.id: b for b in res["document"].blocks}
@@ -172,4 +221,26 @@ async def review_stream(
         _stream_gen(pdf_bytes, as_of, top_k, _parse_pages(pages)),
         media_type="text/event-stream",
         # 프록시(nginx 등) 버퍼링 방지 → 페이지별 점진 노출 보장.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/review/en/stream", dependencies=[Depends(require_api_key)])
+async def review_en_stream(
+    file: UploadFile = File(..., description="검토할 영어 PDF 파일"),
+    as_of: str | None = Form(default=None),
+    top_k_per_segment: int = Form(default=4),
+    pages: str = Form(default="", description="특정 페이지만(쉼표구분, 1-based). 비우면 전체"),
+):
+    """영어 문서 전용 페이지별 점진 스트리밍(SSE).
+
+    한국어판 /documents/review/stream 과 이벤트 계약(pages·page·done, page·bbox·warning 등)이
+    동일하다. 차이는 suggestion(교정 대안 문구)이 영어라는 점뿐이다(issue/reason 은 한국어).
+    내부적으로 _stream_gen 에 suggestion_lang="en" 을 흘려보내고, 페이지별 process_pdf 호출을
+    review.suggestion_lang_scope 로 감싸 review_segments 가 영어 교정문을 만들게 한다.
+    """
+    pdf_bytes = await file.read()
+    top_k = max(1, min(8, top_k_per_segment))
+    return StreamingResponse(
+        _stream_gen(pdf_bytes, as_of, top_k, _parse_pages(pages), suggestion_lang="en"),
+        media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

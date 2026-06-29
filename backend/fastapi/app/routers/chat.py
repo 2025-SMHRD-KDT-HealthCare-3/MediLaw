@@ -180,8 +180,10 @@ def _citation_check(answer: str, as_of) -> VerifyResponse:
     return VerifyResponse(output=results, summary=summarize(results), as_of=as_of)
 
 
-@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
-def chat(req: ChatRequest):
+def _chat_impl(req: ChatRequest):
+    """/chat 의 실제 구현. lang 은 호출 측에서 req.lang 으로 고정해 넘긴다
+    (한국어판='ko', 영어판='en'). 내부 _build·detect_lang 가 req.lang 을 그대로
+    존중하므로, req.lang 만 고정하면 전체 경로가 해당 언어로 일관되게 동작한다."""
     if not req.question.strip():
         raise HTTPException(400, "질문을 입력해주세요.")
     lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
@@ -218,12 +220,25 @@ def chat(req: ChatRequest):
     )
 
 
+@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
+def chat(req: ChatRequest):
+    # 한국어 전용 — req.lang 의 영어 분기를 막고 'ko'로 고정.
+    # (구 동작: lang = req.lang if req.lang in ("ko","en") else detect_lang(...) — 영어판은 /chat/en 사용)
+    return _chat_impl(req.model_copy(update={"lang": "ko"}))
+
+
+@router.post("/chat/en", response_model=ChatResponse, dependencies=[Depends(require_api_key)])
+def chat_en(req: ChatRequest):
+    # 영어 전용 — lang="en" 고정(번역 검색·영문 프롬프트·공식 영문조문 포함).
+    return _chat_impl(req.model_copy(update={"lang": "en"}))
+
+
 def _sse(obj: dict) -> str:
     return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
 
 
-@router.post("/chat/stream", dependencies=[Depends(require_api_key)])
-def chat_stream(req: ChatRequest):
+def _chat_stream_impl(req: ChatRequest):
+    """/chat/stream 의 실제 구현(SSE). lang 은 호출 측에서 req.lang 으로 고정."""
     if not req.question.strip():
         raise HTTPException(400, "질문을 입력해주세요.")
     lang = req.lang if req.lang in ("ko", "en") else detect_lang(req.question)
@@ -287,6 +302,18 @@ def chat_stream(req: ChatRequest):
                     "answer_segments": [s.model_dump() for s in segment_answer(answer, sources)]})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.post("/chat/stream", dependencies=[Depends(require_api_key)])
+def chat_stream(req: ChatRequest):
+    # 한국어 전용 — 'ko'로 고정(영어판은 /chat/en/stream 사용).
+    return _chat_stream_impl(req.model_copy(update={"lang": "ko"}))
+
+
+@router.post("/chat/en/stream", dependencies=[Depends(require_api_key)])
+def chat_en_stream(req: ChatRequest):
+    # 영어 전용 SSE — lang="en" 고정.
+    return _chat_stream_impl(req.model_copy(update={"lang": "en"}))
 
 
 # ───────────── 대화 종료 후 능동형 체크리스트 (POST /chat/checklist) ─────────────
@@ -423,8 +450,8 @@ def _gather_for_queries(queries: list[str], top_k: int, as_of, lang: str):
     return sources, {s.n: s for s in sources}, method
 
 
-@router.post("/chat/checklist", response_model=ChecklistResponse, dependencies=[Depends(require_api_key)])
-def chat_checklist(req: ChecklistRequest):
+def _chat_checklist_impl(req: ChecklistRequest):
+    """/chat/checklist 의 실제 구현. lang 은 호출 측에서 req.lang 으로 고정."""
     findings = _extract_findings(req.reviews)
     if not req.history and not findings:
         raise HTTPException(400, "대화나 문서 검토 결과 중 하나는 필요합니다.")
@@ -516,3 +543,15 @@ def chat_checklist(req: ChecklistRequest):
         sources=sources, search_queries=queries,
         citation_check=_citation_check(audit, req.as_of),
         method=method, lang=lang, as_of=req.as_of)
+
+
+@router.post("/chat/checklist", response_model=ChecklistResponse, dependencies=[Depends(require_api_key)])
+def chat_checklist(req: ChecklistRequest):
+    # 한국어 전용 — 'ko'로 고정(영어판은 /chat/en/checklist 사용).
+    return _chat_checklist_impl(req.model_copy(update={"lang": "ko"}))
+
+
+@router.post("/chat/en/checklist", response_model=ChecklistResponse, dependencies=[Depends(require_api_key)])
+def chat_en_checklist(req: ChecklistRequest):
+    # 영어 전용 — lang="en" 고정(공식 영문조문·영문 프롬프트 포함).
+    return _chat_checklist_impl(req.model_copy(update={"lang": "en"}))

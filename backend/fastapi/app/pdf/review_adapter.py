@@ -43,13 +43,17 @@ def _join_text(block_dumps: list[dict]) -> str:
 
 
 def _run_text_pipeline(
-    text: str, as_of: Optional[str], top_k: int
+    text: str, as_of: Optional[str], top_k: int, suggestion_lang: str = "ko"
 ) -> tuple[Document, list[Segment], dict]:
-    """텍스트 입력 경로 — 단일 블록 Document 로 segment→review→revise 직접 수행."""
+    """텍스트 입력 경로 — 단일 블록 Document 로 segment→review→revise 직접 수행.
+
+    텍스트 경로는 review_segments 를 직접 호출하므로 suggestion_lang 을 인자로 바로 넘긴다.
+    """
     blocks = [Block(id="b1", type="para", text=text, page=1, source="digital")]
     doc_type = classify.classify_doctype(text)
     segs = segment.to_segments(blocks, doc_type)
-    segs = review.review_segments(segs, as_of=as_of, top_k=top_k)
+    segs = review.review_segments(
+        segs, as_of=as_of, top_k=top_k, suggestion_lang=suggestion_lang)
     doc = Document(doc_id="text", doc_type=doc_type, page_count=1, blocks=blocks)
     rev = revise.apply_revisions(doc, segs)
     return doc, segs, rev
@@ -102,14 +106,23 @@ def review_to_response(
     as_of: Optional[str] = None,
     top_k: int = 4,
     lang: str = "auto",
+    suggestion_lang: str = "ko",
 ) -> ReviewResponse:
     """신 PDF 파이프라인 결과를 기존 `ReviewResponse` 계약으로 매핑한다.
 
     pdf_bytes 또는 text 중 하나는 반드시 주어져야 한다(둘 다 없으면 ValueError).
+
+    suggestion_lang: suggestion(=after, 교정 대안 문구)의 작성 언어. "ko"(기본)면 한국어
+        (기존 동작 완전 동일), "en"이면 영어(영어 문서를 실제로 고칠 수 있게). reason/issue
+        등 분석 텍스트는 항상 한국어다. PDF 경로는 process_pdf(소유 밖) 내부에서 review_segments
+        를 호출하므로 인자로 못 넘긴다 → review.suggestion_lang_scope ContextVar 로 전달한다.
     """
     # ── 1. 입력 분기 ──────────────────────────────────────────────────────
     if pdf_bytes is not None:
-        r = process_pdf(pdf_bytes, as_of=as_of, top_k=top_k)
+        # PDF 경로: process_pdf→review_segments 가 내부 호출이라 인자 전달 불가.
+        # suggestion_lang_scope 로 ContextVar 를 깔아 review_segments 가 그 언어를 읽게 한다.
+        with review.suggestion_lang_scope(suggestion_lang):
+            r = process_pdf(pdf_bytes, as_of=as_of, top_k=top_k)
         doc = r["document"]
         segs = r["segments"]
         rev = r["revisions"]
@@ -118,7 +131,7 @@ def review_to_response(
         pages_with_text = {b.page for b in doc.blocks if (b.text or "").strip()}
         ocr_failed_pages = sorted(scan_pages - pages_with_text)
     elif text is not None:
-        doc, segs, rev = _run_text_pipeline(text, as_of, top_k)
+        doc, segs, rev = _run_text_pipeline(text, as_of, top_k, suggestion_lang)
         # 텍스트 경로는 스캔/OCR 없음 → 실패 페이지 없음.
         ocr_failed_pages = []
     else:

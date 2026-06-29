@@ -13,7 +13,9 @@
 """
 from __future__ import annotations
 
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from functools import lru_cache
 
 from app import llm
@@ -23,6 +25,33 @@ from app.rag import embed_queries, fmt_article_label, hybrid_search
 from app.schemas import Hit
 
 _VALID_LEVELS = {"none", "low", "med", "high"}
+
+# suggestion(after) 문구를 어느 언어로 작성할지. "ko"=한국어(기본·기존 동작 불변), "en"=영어.
+# reason 등 설명은 항상 한국어다(한국 검토자용). suggestion_lang 은 after 만 좌우한다.
+_VALID_SUGGESTION_LANGS = {"ko", "en"}
+
+# pipeline.process_pdf(소유 밖)는 review_segments 를 내부에서 호출하므로, PDF 경로에서
+# suggestion_lang 을 인자로 흘려보낼 수 없다. 그래서 ContextVar 로 "현재 검토의 suggestion 언어"를
+# 전달한다. review_segments(suggestion_lang=...)가 명시되면 인자가 우선, 미지정이면 이 ContextVar
+# 를 읽는다(기본 "ko" → 기존 한국어판 동작 완전 동일).
+_suggestion_lang_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "pdf_review_suggestion_lang", default="ko")
+
+
+@contextmanager
+def suggestion_lang_scope(lang: str):
+    """이 블록 안에서 호출되는 review_segments 의 suggestion 언어를 지정한다.
+
+    pipeline.process_pdf 처럼 review_segments 를 내부에서 부르는 경로에 suggestion_lang 을
+    인자로 못 넘기는 경우에 사용한다(예: `with suggestion_lang_scope("en"): process_pdf(...)`).
+    review_segments 가 suggestion_lang 인자를 명시하면 그 인자가 ContextVar 보다 우선한다.
+    """
+    lang = lang if lang in _VALID_SUGGESTION_LANGS else "ko"
+    token = _suggestion_lang_ctx.set(lang)
+    try:
+        yield
+    finally:
+        _suggestion_lang_ctx.reset(token)
 
 # 의료광고 핵심 금지조문 — 광고검토는 입력이 '광고'임이 전제이므로, 검색 결과가 이 조문을
 # 못 끌어와도(흔함) 미감지가 나지 않게, ad 세그먼트 근거에 항상 주입한다.
@@ -108,15 +137,32 @@ _SYSTEM_BASE = (
     "2. level 은 none/low/med/high 중 하나. 위반·과장·오해소지가 없으면 none.\n"
     "3. 근거(법령 번호·인용)는 시스템이 자동으로 연결합니다. 당신은 근거 번호나 법령명을 만들지 말고, "
     "reason 본문에 근거 내용을 자연어로 녹여 설명만 하세요.\n"
-    "4. after 는 그 세그먼트를 '그대로 대체할' 실제 수정 문구만 한국어로 쓰세요(지시·설명·따옴표 없이 "
+    "4. after 는 그 세그먼트를 '그대로 대체할' 실제 수정 문구만 쓰세요(지시·설명·따옴표 없이 "
     "문서에 바로 넣을 문장 자체). level 이 none 이면 after 는 빈 문자열로 두세요.\n"
     '5. 반드시 다음 JSON 형식으로만 응답: {"results":[{"index":0,"level":"high",'
     '"reason":"...","after":"..."}]}. results 에는 모든 세그먼트(index 0..N-1)를 포함하세요.'
 )
 
 
-def _system_prompt(segments: list[Segment]) -> str:
-    """세그먼트들의 doc_type 에 맞춰 점검 관점을 시스템 프롬프트에 분기 추가."""
+# suggestion_lang 별 after(교정 대안 문구) 작성 언어 지시.
+#   ko = 기본(기존 동작). 별도 지시 없음(시스템 베이스 그대로 한국어로 작성).
+#   en = 입력 문서가 영어 → after 는 영어로, 단 reason 등 설명은 여전히 한국어.
+_SUGGESTION_LANG_GUIDE = {
+    "en": (
+        "[언어 지시] 입력 문서는 영어로 작성되어 있습니다. 따라서 `after`(세그먼트를 그대로 "
+        "대체할 실제 교정 대안 문구)는 반드시 영어로 작성하세요(원문 영어 문서에 그대로 다시 넣을 수 "
+        "있도록). 단, `reason`(위반·위험 설명)은 한국 검토자를 위해 반드시 한국어로 작성하세요. "
+        "요약: reason=한국어, after=영어."
+    ),
+}
+
+
+def _system_prompt(segments: list[Segment], suggestion_lang: str = "ko") -> str:
+    """세그먼트들의 doc_type 에 맞춰 점검 관점을 시스템 프롬프트에 분기 추가.
+
+    suggestion_lang=="en" 이면 after(교정 문구)를 영어로 쓰라는 언어 지시를 덧붙인다
+    (reason 등 설명은 여전히 한국어). 기본 "ko" 면 기존 프롬프트와 완전히 동일.
+    """
     guides: list[str] = []
     seen: set[str] = set()
     for seg in segments:
@@ -124,9 +170,13 @@ def _system_prompt(segments: list[Segment]) -> str:
         if dt in _DOCTYPE_GUIDE and dt not in seen:
             seen.add(dt)
             guides.append(_DOCTYPE_GUIDE[dt])
-    if not guides:
-        return _SYSTEM_BASE
-    return _SYSTEM_BASE + "\n\n[문서 유형별 점검 관점]\n" + "\n".join(guides)
+    prompt = _SYSTEM_BASE
+    if guides:
+        prompt += "\n\n[문서 유형별 점검 관점]\n" + "\n".join(guides)
+    lang_guide = _SUGGESTION_LANG_GUIDE.get(suggestion_lang)
+    if lang_guide:
+        prompt += "\n\n" + lang_guide
+    return prompt
 
 
 # doc_type별 검색 질의 보강 — 캐주얼한 문구만으로는 관련 조문이 잘 안 걸려서,
@@ -192,16 +242,25 @@ def review_segments(
     segments: list[Segment],
     as_of: str | None = None,
     top_k: int = 4,
+    suggestion_lang: str | None = None,
 ) -> list[Segment]:
     """세그먼트별 RAG 근거 확보 + LLM 위험판정으로 Segment.risk 를 채운다.
 
     - 근거(RiskResult.law)는 코드가 hits.label 에서 채움(LLM 이 인용 생성 안 함).
     - before = 세그먼트 원문, after/reason/level 은 LLM 판단.
     - LLMUnavailable 시 risk 미채움(graceful).
+    - suggestion_lang: after(교정 대안 문구) 작성 언어. "ko"(기본)면 한국어, "en"이면 영어
+      (reason 등 설명은 항상 한국어). None(미지정)이면 suggestion_lang_scope ContextVar 값을
+      읽고, 그것도 없으면 "ko". → 인자 명시 > ContextVar > "ko" 순으로 결정.
     반환: 입력과 동일한 Segment 리스트(in-place 로 risk 채움).
     """
     if not segments:
         return segments
+
+    # suggestion 언어 결정: 명시 인자 우선, 없으면 ContextVar(PDF 경로용), 둘 다 없으면 "ko".
+    lang = suggestion_lang if suggestion_lang is not None else _suggestion_lang_ctx.get()
+    if lang not in _VALID_SUGGESTION_LANGS:
+        lang = "ko"
 
     per_segment = _gather(segments, as_of, top_k)
     # 광고검토: 검색이 의료광고 금지조문을 못 끌어와도 잡도록 핵심 조문을 근거에 항상 주입.
@@ -219,7 +278,7 @@ def review_segments(
     body = "\n\n".join(blocks)
 
     messages = [
-        {"role": "system", "content": _system_prompt(segments)},
+        {"role": "system", "content": _system_prompt(segments, lang)},
         {"role": "user", "content": f"[세그먼트와 근거]\n{body}"},
     ]
 
@@ -273,6 +332,24 @@ def test_doctype_prompt_branches():
     assert _system_prompt(plain) == _SYSTEM_BASE
 
 
+def test_suggestion_lang_prompt():
+    """suggestion_lang=='en' 이면 영어 after 지시가 프롬프트에 붙고, 기본 'ko'면 안 붙는다."""
+    ad = [Segment(seg_id="s", block_ids=[], text="x", doc_type="ad")]
+    ko = _system_prompt(ad, "ko")
+    en = _system_prompt(ad, "en")
+    assert "after=영어" in en and "after=영어" not in ko
+    # ko(기본)는 기존 프롬프트와 완전히 동일해야(동작 불변).
+    assert ko == _system_prompt(ad)
+
+
+def test_suggestion_lang_scope():
+    """suggestion_lang_scope ContextVar 가 review_segments 기본값에 반영된다."""
+    assert _suggestion_lang_ctx.get() == "ko"
+    with suggestion_lang_scope("en"):
+        assert _suggestion_lang_ctx.get() == "en"
+    assert _suggestion_lang_ctx.get() == "ko"  # 블록 빠지면 원복
+
+
 def test_empty_segments():
     assert review_segments([]) == []
 
@@ -294,8 +371,10 @@ if __name__ == "__main__":
 
     print("=== app.pdf.review 셀프체크 ===")
     test_doctype_prompt_branches()
+    test_suggestion_lang_prompt()
+    test_suggestion_lang_scope()
     test_empty_segments()
-    print("프롬프트 분기/빈입력 OK")
+    print("프롬프트 분기/suggestion_lang/scope/빈입력 OK")
 
     segs = [
         Segment(seg_id="s1", block_ids=["b1"], text="부작용이 전혀 없는 100% 안전한 시술", doc_type="ad"),
