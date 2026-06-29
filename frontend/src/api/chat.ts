@@ -49,3 +49,9 @@ export async function deleteRoom(roomId: number | string) {
   const res = await api.delete(`/rooms/${roomId}`);
   return res.data;
 }
+
+// 광고문구 검토 이력 삭제
+export async function deleteAdCopy(aiCopyId: number | string) {
+  const res = await api.delete(`/ai-ad-copies/${aiCopyId}`);
+  return res.data;
+}
