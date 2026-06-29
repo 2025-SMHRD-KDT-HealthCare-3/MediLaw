@@ -15,12 +15,20 @@ const TEAL = '#13AAA0'   // confirmed
 const AMBER = '#E8A33D'  // warning
 const RED = '#D9534F'    // error
 
-// status → 표시 라벨 + 색
-const statusMeta: Record<ChecklistStatus, { label: string; color: string }> = {
-  ok:   { label: '확인 완료', color: TEAL },
-  todo: { label: '확인 필요', color: AMBER },
-  risk: { label: '위험',      color: RED },
-  na:   { label: '해당 없음', color: '#94A3B8' },
+// status → 표시 라벨 + 색 (언어별)
+const statusMetaByLang: Record<'ko' | 'en', Record<ChecklistStatus, { label: string; color: string }>> = {
+  ko: {
+    ok:   { label: '확인 완료', color: TEAL },
+    todo: { label: '확인 필요', color: AMBER },
+    risk: { label: '위험',      color: RED },
+    na:   { label: '해당 없음', color: '#94A3B8' },
+  },
+  en: {
+    ok:   { label: 'Confirmed',  color: TEAL },
+    todo: { label: 'To check',   color: AMBER },
+    risk: { label: 'Risk',       color: RED },
+    na:   { label: 'N/A',        color: '#94A3B8' },
+  },
 }
 
 export default function Checklist() {
@@ -28,6 +36,7 @@ export default function Checklist() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [checked, setChecked] = useState<Record<string, boolean>>({})
+  const [lang, setLang] = useState<'ko' | 'en'>('ko') // 표시 언어 (기본 한국어)
 
   useEffect(() => {
     let alive = true
@@ -41,10 +50,13 @@ export default function Checklist() {
         const roomsRes = await getRooms()
         const rooms = roomsRes?.data ?? []
         if (rooms.length === 0) {
-          if (alive) setError('분석할 상담 내역이 없어요. 먼저 챗봇에서 상담을 진행해주세요.')
+          if (alive) setError(
+            lang === 'en'
+              ? 'No consultation found. Please start a chat first.'
+              : '분석할 상담 내역이 없어요. 먼저 챗봇에서 상담을 진행해주세요.',
+          )
           return
         }
-        // 최신 방 (목록 첫 번째가 최신이라고 가정, 아니면 created_at 정렬)
         const latestRoom = rooms[0]
 
         // 2. 그 방의 대화 가져와서 ChatTurn[]으로 변환
@@ -56,16 +68,24 @@ export default function Checklist() {
         }))
 
         if (history.length === 0) {
-          if (alive) setError('대화 내역이 비어 있어요. 챗봇에서 질문을 먼저 해주세요.')
+          if (alive) setError(
+            lang === 'en'
+              ? 'The conversation is empty. Please ask a question in the chat first.'
+              : '대화 내역이 비어 있어요. 챗봇에서 질문을 먼저 해주세요.',
+          )
           return
         }
 
-        // 3. 체크리스트 생성 요청 (수~수십 초 소요)
-        const res = await generateChecklist({ history, lang: 'ko' })
+        // 3. 체크리스트 생성 요청 (lang 반영, 수~수십 초 소요)
+        const res = await generateChecklist({ history, lang })
         if (alive) setData(res)
       } catch (e) {
         console.error('체크리스트 생성 실패:', e)
-        if (alive) setError('체크리스트 생성에 실패했어요. 잠시 후 다시 시도해주세요.')
+        if (alive) setError(
+          lang === 'en'
+            ? 'Failed to generate the checklist. Please try again shortly.'
+            : '체크리스트 생성에 실패했어요. 잠시 후 다시 시도해주세요.',
+        )
       } finally {
         if (alive) setLoading(false)
       }
@@ -75,19 +95,70 @@ export default function Checklist() {
     return () => {
       alive = false
     }
-  }, [])
+  }, [lang]) // 언어 바뀌면 재생성
 
   const toggle = (id: string) => setChecked((c) => ({ ...c, [id]: !c[id] }))
+
+  const statusMeta = statusMetaByLang[lang]
+  const t = {
+    title: lang === 'en' ? 'Legal Compliance Checklist' : '법령 준수 체크리스트',
+    autoGen: lang === 'en' ? 'Auto-generated from chat' : '대화 기반 자동 생성',
+    desc: lang === 'en'
+      ? 'Analyzed the consultation to organize legal obligations into checklist items.'
+      : '상담 내용을 분석해 확인이 필요한 법적 의무를 점검 항목으로 정리했습니다.',
+    progress: lang === 'en' ? 'Progress' : '점검 진행',
+    risk: lang === 'en' ? 'Risk' : '위험',
+    todo: lang === 'en' ? 'To check' : '확인필요',
+    done: lang === 'en' ? 'Done' : '완료',
+    generating: lang === 'en' ? 'Generating checklist…' : '체크리스트 생성 중…',
+    generatingSub: lang === 'en'
+      ? 'Analyzing the conversation. This may take a while.'
+      : '대화를 분석하고 있어요. 수십 초 걸릴 수 있어요.',
+  }
+
+  // 언어 토글 (로딩/에러/정상 모든 화면 상단에 공통 표시)
+  const LangToggle = () => (
+    <div className="inline-flex overflow-hidden rounded-lg border border-slate-300">
+      <button
+        type="button"
+        onClick={() => setLang('ko')}
+        disabled={loading}
+        className={`px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+          lang === 'ko' ? 'text-white' : 'bg-white text-slate-500 hover:bg-slate-50'
+        }`}
+        style={{ backgroundColor: lang === 'ko' ? NAVY : undefined }}
+      >
+        한국어
+      </button>
+      <button
+        type="button"
+        onClick={() => setLang('en')}
+        disabled={loading}
+        className={`px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+          lang === 'en' ? 'text-white' : 'bg-white text-slate-500 hover:bg-slate-50'
+        }`}
+        style={{ backgroundColor: lang === 'en' ? NAVY : undefined }}
+      >
+        English
+      </button>
+    </div>
+  )
 
   // 로딩 상태
   if (loading) {
     return (
       <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
-        <div className="mx-auto flex max-w-2xl flex-col items-center justify-center py-32">
-          <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200"
-               style={{ borderTopColor: NAVY }} />
-          <p className="mt-4 text-sm font-medium" style={{ color: NAVY }}>체크리스트 생성 중…</p>
-          <p className="mt-1 text-xs text-slate-400">대화를 분석하고 있어요. 수십 초 걸릴 수 있어요.</p>
+        <div className="mx-auto max-w-2xl">
+          <div className="mb-6 flex items-center justify-between">
+            <h1 className="text-2xl font-bold" style={{ color: NAVY }}>{t.title}</h1>
+            <LangToggle />
+          </div>
+          <div className="flex flex-col items-center justify-center py-28">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200"
+                 style={{ borderTopColor: NAVY }} />
+            <p className="mt-4 text-sm font-medium" style={{ color: NAVY }}>{t.generating}</p>
+            <p className="mt-1 text-xs text-slate-400">{t.generatingSub}</p>
+          </div>
         </div>
       </div>
     )
@@ -98,9 +169,14 @@ export default function Checklist() {
     return (
       <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
         <div className="mx-auto max-w-2xl">
-          <h1 className="mb-6 text-2xl font-bold" style={{ color: NAVY }}>법령 준수 체크리스트</h1>
+          <div className="mb-6 flex items-center justify-between">
+            <h1 className="text-2xl font-bold" style={{ color: NAVY }}>{t.title}</h1>
+            <LangToggle />
+          </div>
           <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
-            <p className="text-sm text-slate-500">{error || '데이터를 불러오지 못했어요.'}</p>
+            <p className="text-sm text-slate-500">
+              {error || (lang === 'en' ? 'Failed to load data.' : '데이터를 불러오지 못했어요.')}
+            </p>
           </div>
         </div>
       </div>
@@ -115,18 +191,19 @@ export default function Checklist() {
       <div className="mx-auto max-w-2xl">
         {/* 헤더 */}
         <div className="mb-1 flex items-center justify-between">
-          <h1 className="text-2xl font-bold" style={{ color: NAVY }}>법령 준수 체크리스트</h1>
-          <span className="text-sm text-slate-400">대화 기반 자동 생성</span>
+          <h1 className="text-2xl font-bold" style={{ color: NAVY }}>{t.title}</h1>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-slate-400">{t.autoGen}</span>
+            <LangToggle />
+          </div>
         </div>
-        <p className="mb-6 text-sm text-slate-500">
-          상담 내용을 분석해 확인이 필요한 법적 의무를 점검 항목으로 정리했습니다.
-        </p>
+        <p className="mb-6 text-sm text-slate-500">{t.desc}</p>
 
         {/* 진행 요약 */}
         <div className="mb-6 flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4">
           <div className="flex-1">
             <div className="flex items-center justify-between text-sm">
-              <span className="font-medium" style={{ color: NAVY }}>점검 진행</span>
+              <span className="font-medium" style={{ color: NAVY }}>{t.progress}</span>
               <span className="text-slate-500">{doneCount} / {s.total}</span>
             </div>
             <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100">
@@ -134,9 +211,9 @@ export default function Checklist() {
             </div>
           </div>
           <div className="flex gap-3 text-center text-xs">
-            <div><div className="text-lg font-bold" style={{ color: RED }}>{s.risk}</div><div className="text-slate-400">위험</div></div>
-            <div><div className="text-lg font-bold" style={{ color: AMBER }}>{s.todo}</div><div className="text-slate-400">확인필요</div></div>
-            <div><div className="text-lg font-bold" style={{ color: TEAL }}>{s.ok}</div><div className="text-slate-400">완료</div></div>
+            <div><div className="text-lg font-bold" style={{ color: RED }}>{s.risk}</div><div className="text-slate-400">{t.risk}</div></div>
+            <div><div className="text-lg font-bold" style={{ color: AMBER }}>{s.todo}</div><div className="text-slate-400">{t.todo}</div></div>
+            <div><div className="text-lg font-bold" style={{ color: TEAL }}>{s.ok}</div><div className="text-slate-400">{t.done}</div></div>
           </div>
         </div>
 

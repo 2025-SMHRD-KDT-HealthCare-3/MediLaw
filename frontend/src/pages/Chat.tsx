@@ -17,6 +17,7 @@ const ROOM_KEY = 'medilaw_current_room' // localStorage 키
 export default function Chat() {
   const { messages, addMessage, setMessages } = useChatStore()
   const [input, setInput] = useState('')
+  const [lang, setLang] = useState<'ko' | 'en'>('ko') // 입력 언어 (기본 한국어)
   const [roomId, setRoomId] = useState<number | string | null>(null)
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
@@ -86,7 +87,7 @@ export default function Chat() {
     setLoading(true)
 
     try {
-      const res = await askAi(roomId, question)
+      const res = await askAi(roomId, question, lang)
       const data = res.data
       const answer = data?.answer_chat
       const evidences = data?.evidences ?? []
@@ -179,23 +180,58 @@ export default function Chat() {
       </main>
 
       <footer className="border-t border-gray-200 bg-white px-6 py-4">
-        <div className="mx-auto flex max-w-3xl items-center gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="의료법 관련 질문을 입력하세요…"
-            disabled={loading}
-            className="flex-1 rounded-full border border-gray-300 px-4 py-2.5 text-sm focus:border-aqua focus:outline-none disabled:bg-gray-100"
-          />
-          <button
-            onClick={handleSend}
-            disabled={loading}
-            className="rounded-full bg-navy px-5 py-2.5 text-sm font-medium text-white hover:bg-navy/90 disabled:opacity-50"
-          >
-            전송
-          </button>
+        <div className="mx-auto max-w-3xl">
+          {/* 입력 언어 토글 */}
+          <div className="mb-2 flex items-center gap-3">
+            <div className="inline-flex overflow-hidden rounded-lg border border-gray-300">
+              <button
+                type="button"
+                onClick={() => setLang('ko')}
+                disabled={loading}
+                className={`px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                  lang === 'ko' ? 'bg-navy text-white' : 'bg-white text-slate-500 hover:bg-gray-50'
+                }`}
+              >
+                한국어
+              </button>
+              <button
+                type="button"
+                onClick={() => setLang('en')}
+                disabled={loading}
+                className={`px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                  lang === 'en' ? 'bg-navy text-white' : 'bg-white text-slate-500 hover:bg-gray-50'
+                }`}
+              >
+                English
+              </button>
+            </div>
+            <span className="text-xs text-slate-400">
+              영어로 입력하면 한국 법 기준으로 분석해 영어로 답변합니다.
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+              placeholder={
+                lang === 'en'
+                  ? 'Ask a question about Korean medical law…'
+                  : '의료법 관련 질문을 입력하세요…'
+              }
+              disabled={loading}
+              className="flex-1 rounded-full border border-gray-300 px-4 py-2.5 text-sm focus:border-aqua focus:outline-none disabled:bg-gray-100"
+            />
+            <button
+              onClick={handleSend}
+              disabled={loading}
+              className="rounded-full bg-navy px-5 py-2.5 text-sm font-medium text-white hover:bg-navy/90 disabled:opacity-50"
+            >
+              전송
+            </button>
+          </div>
         </div>
       </footer>
     </div>

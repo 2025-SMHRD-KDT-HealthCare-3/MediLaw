@@ -37,6 +37,7 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB (백엔드 제한)
 export default function AdReview() {
   const [text, setText] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  const [lang, setLang] = useState<'ko' | 'en'>('ko') // 입력 언어 (기본 한국어)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ParsedResult | null>(null)
   const [error, setError] = useState('')
@@ -55,7 +56,7 @@ export default function AdReview() {
     setResult(null)
     setLoading(true)
     try {
-      const res = await reviewAdCopy(text, file)
+      const res = await reviewAdCopy(text, file, lang)
       // 응답 데이터 위치 보정: 검토 결과는 ai_copy 안에 담겨 옴 (없으면 root 그대로)
       const root = res.data ?? res
       const data = root.ai_copy ?? root
@@ -111,10 +112,43 @@ export default function AdReview() {
           의료광고 문구를 입력하거나 PDF를 업로드하면 법령 위반 소지를 검토해드립니다.
         </p>
 
+        {/* 입력 언어 토글 */}
+        <div className="mb-3 flex items-center gap-3">
+          <div className="inline-flex overflow-hidden rounded-lg border border-gray-300">
+            <button
+              type="button"
+              onClick={() => setLang('ko')}
+              disabled={loading}
+              className={`px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 ${
+                lang === 'ko' ? 'bg-navy text-white' : 'bg-white text-slate-500 hover:bg-gray-50'
+              }`}
+            >
+              한국어
+            </button>
+            <button
+              type="button"
+              onClick={() => setLang('en')}
+              disabled={loading}
+              className={`px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 ${
+                lang === 'en' ? 'bg-navy text-white' : 'bg-white text-slate-500 hover:bg-gray-50'
+              }`}
+            >
+              English
+            </button>
+          </div>
+          <span className="text-xs text-slate-400">
+            영어로 입력하면 한국 법 기준으로 분석해 영어로 답변합니다.
+          </span>
+        </div>
+
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder='예: "100% 안전한 시술, 부작용 전혀 없음"'
+          placeholder={
+            lang === 'en'
+              ? 'e.g. "100% safe procedure, no side effects at all"'
+              : '예: "100% 안전한 시술, 부작용 전혀 없음"'
+          }
           rows={4}
           disabled={loading}
           className="w-full rounded-lg border border-gray-300 p-4 text-sm focus:border-aqua focus:outline-none disabled:bg-gray-100"
