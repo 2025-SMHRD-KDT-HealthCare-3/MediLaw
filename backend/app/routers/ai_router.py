@@ -17,6 +17,7 @@ router = APIRouter(prefix="/rooms/{room_id}", tags=["ai-answer"])
 
 class AiAnswerRequest(BaseModel):
     question: str = Field(min_length=1, max_length=5000)
+    lang: str = Field(default="ko", pattern="^(ko|en)$")  # 'en'이면 영어 전용 챗봇(/chat/en)
 
     @field_validator("question", mode="before")
     @classmethod
@@ -31,7 +32,7 @@ def create_ai_answer(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = ai_answer_service.create_ai_answer(db, room_id, current_user, data.question)
+    result = ai_answer_service.create_ai_answer(db, room_id, current_user, data.question, data.lang)
     payload = {
         "question_chat": ChatResponse.model_validate(result["question_chat"]),
         "answer_chat": ChatResponse.model_validate(result["answer_chat"]),
