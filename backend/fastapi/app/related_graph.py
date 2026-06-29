@@ -230,7 +230,8 @@ def _firewall_issue(raw: dict, hits, used_case_ids: set[int] | None = None) -> G
     # statute_ref: 유효하고 실제로 statute 인 후보만 인정.
     statute = ""
     sref = raw.get("statute_ref")
-    if isinstance(sref, int) and 0 <= sref < len(hits) and hits[sref].source_type == "statute":
+    if (isinstance(sref, int) and not isinstance(sref, bool)
+            and 0 <= sref < len(hits) and hits[sref].source_type == "statute"):
         statute = hits[sref].label
 
     # case_refs: 유효하고 실제로 case 인 후보만. issue 내부 + (있으면)issue 간 중복 제거.
@@ -239,7 +240,8 @@ def _firewall_issue(raw: dict, hits, used_case_ids: set[int] | None = None) -> G
     refs = raw.get("case_refs")
     if isinstance(refs, list):
         for r in refs:
-            if not isinstance(r, int) or r in seen or not (0 <= r < len(hits)):
+            if (not isinstance(r, int) or isinstance(r, bool)
+                    or r in seen or not (0 <= r < len(hits))):
                 continue
             if used_case_ids is not None and r in used_case_ids:
                 continue  # 이미 다른 issue에 배정된 판례 → 건너뜀

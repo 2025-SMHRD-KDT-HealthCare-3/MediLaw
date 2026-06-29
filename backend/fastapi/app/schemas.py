@@ -1,9 +1,39 @@
 """요청/응답 스키마 — lawbot.org v1 API 계약."""
-from typing import Literal, Optional
+import re
+from datetime import date
+from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import AfterValidator, BaseModel, Field
 
 SourceType = Literal["statute", "case", "interpretation", "decision", "guideline"]
+
+
+def _validate_as_of(v: Optional[str]) -> Optional[str]:
+    """as_of 검증 — None/빈값은 None, YYYY-MM-DD(또는 YYYYMMDD)이면서 실제 유효 날짜만 허용.
+
+    잘못된 값(형식 오류 또는 2026-13-99 같은 불가능한 날짜)이 시점필터를 조용히
+    무력화/왜곡하지 않도록 입력 단에서 422로 막는다.
+    """
+    if v is None:
+        return None
+    v = v.strip()
+    if not v:
+        return None
+    if re.fullmatch(r"\d{8}", v):           # YYYYMMDD → 검증용으로 dash 형태로
+        s = f"{v[:4]}-{v[4:6]}-{v[6:8]}"
+    elif re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+        s = v
+    else:
+        raise ValueError("as_of는 YYYY-MM-DD(또는 YYYYMMDD) 형식이어야 합니다")
+    try:
+        date.fromisoformat(s)               # 실제 유효 날짜인지(월≤12·일≤말일)
+    except ValueError:
+        raise ValueError(f"as_of '{v}' 는 유효한 날짜가 아닙니다")
+    return v
+
+
+# 시점조회 파라미터 공용 타입(검증 포함). 요청 모델의 as_of 에 사용.
+AsOf = Annotated[Optional[str], AfterValidator(_validate_as_of)]
 
 
 # ---------- 공통 ----------
@@ -24,12 +54,12 @@ class RetrieveRequest(BaseModel):
     query: str
     top_k: int = Field(8, ge=1, le=50)
     source_types: Optional[list[SourceType]] = None
-    as_of: Optional[str] = Field(None, description="시점 조회 YYYY-MM-DD (이 날짜에 유효한 자료만)")
+    as_of: AsOf = Field(None, description="시점 조회 YYYY-MM-DD (이 날짜에 유효한 자료만)")
 
 
 class RetrieveResponse(BaseModel):
     output: list[Hit]
-    as_of: Optional[str] = None
+    as_of: AsOf = None
     source: str = "medilaw.db"
     method: str = "hybrid"
 
@@ -39,7 +69,7 @@ class SourcePackRequest(BaseModel):
     query: str
     max_items: int = Field(8, ge=1, le=30)
     source_types: Optional[list[SourceType]] = None
-    as_of: Optional[str] = None
+    as_of: AsOf = None
 
 
 class Citation(BaseModel):
@@ -53,7 +83,7 @@ class Citation(BaseModel):
 class SourcePackResponse(BaseModel):
     output: str = Field(description="LLM 인용용 마크다운")
     citations: list[Citation]
-    as_of: Optional[str] = None
+    as_of: AsOf = None
     source: str = "medilaw.db"
 
 
@@ -69,7 +99,7 @@ class CitationInput(BaseModel):
 class VerifyRequest(BaseModel):
     text: Optional[str] = Field(None, description="LLM 답변 원문 — 인용 자동 추출")
     citations: Optional[list[CitationInput]] = None
-    as_of: Optional[str] = None
+    as_of: AsOf = None
 
 
 class VerifyResult(BaseModel):
@@ -99,7 +129,7 @@ class VerifySummary(BaseModel):
 class VerifyResponse(BaseModel):
     output: list[VerifyResult]
     summary: VerifySummary
-    as_of: Optional[str] = None
+    as_of: AsOf = None
 
 
 # ---------- /chat (AI 질의응답 챗봇) ----------
@@ -116,7 +146,7 @@ class ChatRequest(BaseModel):
     history: list[ChatTurn] = Field(default_factory=list, description="이전 대화(무상태 — 클라이언트가 보관·전달)")
     top_k: int = Field(8, ge=1, le=20)
     source_types: Optional[list[SourceType]] = None
-    as_of: Optional[str] = None
+    as_of: AsOf = None
     lang: Lang = Field("auto", description="응답 언어. auto=질문 언어 자동감지")
 
 
@@ -152,14 +182,14 @@ class ChatResponse(BaseModel):
     method: str = "hybrid"
     lang: str = Field("ko", description="실제 응답 언어")
     search_query: str = Field("", description="검색에 실제 사용된 질의(멀티턴이면 재작성된 standalone)")
-    as_of: Optional[str] = None
+    as_of: AsOf = None
 
 
 # ---------- /documents/review (능동형 PDF 에디터) ----------
 class ReviewRequest(BaseModel):
     """텍스트 직접 검토(파일 업로드는 multipart form 으로 처리)."""
     text: str = Field(description="검토할 문서 본문(광고문구·동의서·약관 등)")
-    as_of: Optional[str] = None
+    as_of: AsOf = None
     top_k_per_segment: int = Field(4, ge=1, le=8, description="세그먼트별 근거 검색 개수")
 
 
@@ -210,7 +240,7 @@ class ReviewResponse(BaseModel):
     citation_check: VerifyResponse = Field(description="findings 인용의 Citation Firewall 검증")
     method: str = "hybrid"
     lang: str = Field("ko", description="실제 응답 언어")
-    as_of: Optional[str] = None
+    as_of: AsOf = None
 
 
 # ---------- /chat/checklist (대화 종료 후 능동형 체크리스트) ----------
@@ -224,7 +254,7 @@ class ChecklistRequest(BaseModel):
                     "(segment_text/risk_level/issue/suggestion)를 방어적으로 파싱(누락 필드 무시)")
     top_k: int = Field(6, ge=1, le=20, description="쟁점별 근거 검색 개수")
     max_topics: int = Field(5, ge=1, le=8, description="대화·문서에서 추출할 법적 쟁점 수")
-    as_of: Optional[str] = None
+    as_of: AsOf = None
     lang: Lang = Field("auto", description="응답 언어. auto=대화 언어 자동감지")
     prev_checklist: Optional[list[dict]] = Field(
         None, description="직전 checklist(재생성 시 사용자 status/note 보존)")
@@ -238,7 +268,7 @@ class ChecklistResponse(BaseModel):
     citation_check: VerifyResponse = Field(description="체크리스트 인용의 Citation Firewall 검증")
     method: str = "hybrid"
     lang: str = Field("ko", description="실제 응답 언어")
-    as_of: Optional[str] = None
+    as_of: AsOf = None
 
 
 # ---------- /v1/laws/* (법령 개정 현황 대시보드) ----------
@@ -309,7 +339,7 @@ class RelatedGraphRequest(BaseModel):
     """입력 문구/질의 하나로 연관 판례 그래프를 요청 (챗봇·PDF 검토 공용)."""
     text: str = Field(description="사용자가 보고 있던 문구/질의 (광고 문구, 챗봇 질의 등)")
     lang: str = Field("ko", description="라벨 언어 ko|en")
-    as_of: Optional[str] = Field(None, description="시점 조회 YYYY-MM-DD")
+    as_of: AsOf = Field(None, description="시점 조회 YYYY-MM-DD")
     top_k: int = Field(12, ge=1, le=30, description="검색 후보 수")
     seeds: list[GraphSeed] = Field(
         default_factory=list,

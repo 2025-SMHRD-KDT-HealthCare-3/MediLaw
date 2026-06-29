@@ -57,9 +57,10 @@ def test_korean_out_of_domain_refused():
 def test_english_out_of_domain_refused():
     # 영어는 한국어 키워드 사전 밖이라 규칙이 단정 않고 LLM 에 위임(None). (항상 검증)
     assert dr.rule_based_route("Write me a python quicksort") is None
+    # 영어 챗봇은 전용 엔드포인트 /chat/en 으로 분리됨(기존 /chat 은 한국어 전용).
     # 실제 거절은 LLM 분류가 필요(키 없으면 LLM 폴백이 Tier 2라 거절 안 됨) → 키 있을 때만.
     if os.environ.get("OPENAI_API_KEY"):
-        resp = chat.chat(ChatRequest(question="Write me a python quicksort", lang="en"))
+        resp = chat.chat_en(ChatRequest(question="Write me a python quicksort"))
         _assert_refused(resp, chat._OUT_OF_DOMAIN_EN)
         assert resp.lang == "en"
 

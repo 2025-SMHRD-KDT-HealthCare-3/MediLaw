@@ -35,15 +35,22 @@ def _digits(s) -> str:
     return re.sub(r"\D", "", str(s or ""))
 
 
+# 법제처 장애 시 워커가 오래 묶이지 않게 짧은 타임아웃·소수 재시도.
+# 최악 대기 ≈ _RETRIES*_TIMEOUT + (_RETRIES-1)*_RETRY_SLEEP (기본 ≈ 16.8s).
+_TIMEOUT = 8
+_RETRIES = 2
+_RETRY_SLEEP = 0.8
+
+
 def call(path: str, **params):
     """DRF JSON 호출 (URL 인코딩 + 재시도). HTML 응답이면 LawApiError."""
     params.setdefault("OC", LAW_OC)
     params.setdefault("type", "JSON")
     url = f"{BASE}/{path}?" + urllib.parse.urlencode(params)
     last = None
-    for attempt in range(3):
+    for attempt in range(_RETRIES):
         try:
-            with urllib.request.urlopen(url, timeout=30) as r:
+            with urllib.request.urlopen(url, timeout=_TIMEOUT) as r:
                 raw = r.read().decode("utf-8", "ignore")
             if raw.lstrip().startswith("<"):
                 raise LawApiError("법제처 API HTML 응답(OC 미등록/미신청 또는 오류)")
@@ -52,7 +59,8 @@ def call(path: str, **params):
             raise
         except Exception as e:  # noqa: BLE001
             last = e
-            time.sleep(1.2)
+            if attempt < _RETRIES - 1:  # 마지막 시도 뒤엔 불필요한 sleep 생략
+                time.sleep(_RETRY_SLEEP)
     raise LawApiError(f"법제처 API 호출 실패: {last}")
 
 

@@ -16,7 +16,7 @@
 | ③ | Citation Verification(환각 방지) | `POST /v1/verify` (+ ①②④에 자동 내장) | ✅ |
 | ④ | 능동형 체크리스트 | `POST /chat/checklist`(대화 기반) · `/documents/review`(문서 기반) | ✅ |
 | ⑤ | 법령 개정 현황 대시보드 | `GET /v1/laws/revisions · /{law_id}/revisions · /diff` (법제처 API) | ✅ |
-| ⑥ | 해외기업용 영어 입력 | `lang=en` (①②④ 공통 — 법령은 공식 영문) | ✅ |
+| ⑥ | 해외기업용 영어 입력 | **전용 엔드포인트** `/chat/en*` · `/documents/review/en*` (영어 토글) | ✅ |
 
 > **6대 기능 백엔드 전부 구현·라이브 검증 완료.** 남은 건 프론트엔드(React) UI뿐. 기능별 상세는 [API 엔드포인트 상세](#-api-엔드포인트-상세).
 
@@ -28,7 +28,7 @@
 - [x] **임베딩 빌드 완료** chunks 212,459 (sqlite-vec)
 - [x] **AI 챗봇** `POST /chat`(+SSE) — gpt-5.5 RAG + Citation Firewall 검증 + **3-tier 도메인 라우터**(규칙→제약LLM→되묻기, 4대 법령 전체·헬스케어 범위)
 - [x] **능동형 PDF 에디터** `POST /documents/review` — 위험 탐지 + before/after 수정안, 스캔본 **비전 OCR** fallback. **근거 연결·인덱스는 코드가**(코어 검색 기반), LLM은 판단·문구만
-- [x] **영어 입력 지원** `lang=en` — 법령은 **공식 영문**(법제처 elaw API), 판례·해석례·가이드라인은 비공식 번역
+- [x] **영어 전용 엔드포인트** `/chat/en*`(영어 챗봇) · `/documents/review/en*`(영어 문서검토) — 프론트 영어 토글용. 챗봇은 영어 입출력+공식 영문조문, PDF는 분석=한글/교정문=영어. 기존 엔드포인트는 한국어 전용
 - [x] **챗봇 멀티턴 기억** — `/chat`·`/chat/stream`이 `history[]`(이전 대화) 수신(무상태, 클라이언트 보관)
 - [x] **능동형 체크리스트** — `/documents/review`가 "확인 필요 항목" 생성 + `prev_checklist` 대조로 추가/삭제/유지
 - [x] **통합 체크리스트** `POST /chat/checklist` — '체크리스트 생성' 버튼: **대화(history) + PDF 검토(reviews)** 종합 → 법적 쟁점 추출 → RAG 근거검색 → 통합 대응 체크리스트
@@ -43,12 +43,14 @@
 
 | 분류 | 메서드 · 경로 | 용도 |
 |---|---|---|
-| 🟢 **프론트용** | `POST /chat/stream` | AI 질의응답 챗봇(SSE 스트리밍) |
-| 🟢 **프론트용** | `POST /documents/review` | PDF/텍스트 위험 검토 + before/after(전체 한 번에) |
+| 🟢 **프론트용** | `POST /chat/stream` | AI 질의응답 챗봇(SSE 스트리밍) — **한국어** |
+| 🟢 **프론트용** | `POST /chat/en/stream` | 위와 동일 **영어판**(영어 입력→영어 답변 + 공식 영문조문) |
+| 🟢 **프론트용** | `POST /documents/review` | PDF/텍스트 위험 검토 + before/after — **한국어** |
+| 🟢 **프론트용** | `POST /documents/review/en` | 위 **영어 문서판**(분석=한글, 교정문=영어) · `/en/stream` SSE |
 | 🟢 **프론트용** | `POST /documents/review/stream` | 위와 동일, **페이지별 SSE 점진 노출**(앞 페이지부터) |
-| 🟢 **프론트용** | `POST /chat/checklist` | '체크리스트 생성' 버튼 — 대화+PDF검토 종합 → 통합 체크리스트 |
+| 🟢 **프론트용** | `POST /chat/checklist` | '체크리스트 생성' 버튼 — 대화+PDF검토 종합 → 통합 체크리스트 (`/chat/en/checklist` 영어) |
 | 🟢 **프론트용** | `POST /v1/related-graph` | 인용 `[n]`/finding **더보기** 클릭 → 연관 판례 엣지-노드 그래프 JSON |
-| 챗봇(단발) | `POST /chat` | 위와 동일, JSON 한 번에 반환(느림) |
+| 챗봇(단발) | `POST /chat` · `/chat/en` | 위와 동일, JSON 한 번에 반환(느림) — 한/영 |
 | 코어 | `POST /v1/retrieve` | 하이브리드 RAG 검색 |
 | 코어 | `POST /v1/source-pack` | LLM 인용용 근거 마크다운 번들 |
 | 코어 | `POST /v1/verify` | Citation Firewall(인용 검증) |
@@ -77,7 +79,8 @@
 | 6 | 멀티턴/재작성 | `history` 포함 호출 | `search_query`가 standalone으로 재작성 |
 | 7 | PDF 에디터 | `POST /documents/review -F text=...` | `findings`+`checklist`+`revised_text` |
 | 8 | 능동형 체크리스트 | `prev_checklist` 재전달 | `change`(added/kept/removed)·`checklist_summary` 갱신 |
-| 9 | 영어 입력 | `POST /chat {"question":"...","lang":"en"}` | 영어 답변, 법령은 `is_official_en:true` |
+| 9 | 영어 챗봇 | `POST /chat/en {"question":"..."}` | 영어 답변, 법령은 `is_official_en:true` |
+| 9-B | 영어 PDF | `POST /documents/review/en -F text=...` | findings.issue=한글, suggestion=영어 |
 | 10 | MCP 서버 | `GET /health` | `mcp_mounted:true` (도구 4) |
 | 11 | 대화 종료 체크리스트 | `POST /chat/checklist {"history":[...]}` | `checklist[]`(근거 인용) + `search_queries` |
 | 12 | 개정 대시보드 | `GET /v1/laws/revisions` | 4대 법령 현행·시행예정·연혁 |
@@ -108,7 +111,7 @@
   "top_k": 8,                  // 1~20, 검색 근거 수
   "source_types": null,        // ["statute","case","interpretation","decision","guideline"] 필터(선택)
   "as_of": null,               // "2024-01-01" 시점 조회(선택)
-  "lang": "auto"               // auto|ko|en — en이면 영어로 답변(아래 "영어 입력 지원")
+  "lang": "auto"               // (이 엔드포인트는 한국어 전용 — 영어는 /chat/en 사용)
 }
 ```
 > **멀티턴**: FastAPI는 무상태입니다. 대화이력은 클라이언트(→Node/MySQL)가 보관하고 매 요청에 `history`로 되돌려줍니다. `history`가 있으면 후속질문("그럼 그건?")을 **독립 검색질의로 재작성**해 RAG 정확도를 높입니다(응답 `search_query`에 실제 사용 질의 노출).
@@ -208,7 +211,7 @@ reviewStream(fileInput.files[0], {
 | `text` | ▲ | PDF 대신 본문 직접 입력 |
 | `as_of` | – | 시점 조회 `YYYY-MM-DD` |
 | `top_k_per_segment` | – | 세그먼트별 근거 수(기본 4, 1~8) |
-| `lang` | – | `auto`\|`ko`\|`en` — 영문 문서 검토 시 `en`(아래 "영어 입력 지원") |
+| `lang` | – | 응답 라벨용(검토는 한국어 전용). **영문 문서**는 `/documents/review/en` 사용(교정문=영어) |
 | `prev_checklist` | – | 직전 응답의 `checklist`를 JSON 배열로 전달 → 능동형 재조정(추가/삭제/유지) |
 
 **응답** `application/json`
@@ -612,26 +615,69 @@ data/
   medilaw.db     law-app에서 복사 (cases 20,975 + articles 189,238 + statutes 3,438 + FTS5)
 ```
 
-## 영어 입력 지원 (`lang=en`)
+## 영어 지원 — 전용 엔드포인트 (프론트 영어 토글)
 
-`/chat`·`/chat/stream`·`/documents/review` 는 `lang`(`auto`\|`ko`\|`en`)을 받습니다. `auto`는 입력의 한글 비율로 자동 감지.
+영어는 **별도 엔드포인트**로 분리돼 있습니다(기존 `lang=en` 인라인 방식 폐기). 프론트의 **영어 토글 버튼**이 한국어판↔영어판 경로를 바꿉니다. **기존 `/chat`·`/documents/review` 는 한국어 전용**입니다(`lang` 폼 필드는 응답 라벨 용도만).
 
-영어 질의 흐름 (`app/english.py`):
+| 한국어 | 영어 토글 시 | 출력 |
+|---|---|---|
+| `/chat`(+`/stream`,`/checklist`) | `/chat/en`(+`/en/stream`,`/en/checklist`) | 영어 입력 → **영어 답변** + 공식 영문조문 |
+| `/documents/review`(+`/stream`) | `/documents/review/en`(+`/en/stream`) | 영어 문서 → 분석(issue·reason)=**한글**, 교정문(suggestion)=**영어** |
+
+**① 영어 챗봇** (`/chat/en*`) — 영어 질의 흐름 (`app/english.py`):
 ```
 EN 질문 → ① llm.translate(EN→KO)로 검색어 번역 (FTS는 한글 토큰이라 필수)
         → ② hybrid_search(KO 코퍼스)
         → ③ statute hit → articles_en 에서 공식 영문 조문 부착(label_en/snippet_en/is_official_en)
         → ④ gpt-5.5: 공식 영문 조문 인용 + 그 외(판례·해석례·가이드라인)는 비공식 번역 → 영어 답변
 ```
-- **법령 = 공식 영문**: 법제처 영문법령 Open API(`target=elaw`)로 적재한 `articles_en` 사용 → 법령명·조문을 **공식 번역 그대로** 인용(환각·오역 방지). `ChatSource.is_official_en=true`.
-- **판례·해석례·가이드라인 = 비공식 번역**: 공식 영문이 없어 LLM이 즉석 번역하고 `(unofficial translation)`으로 표기.
-- 응답에 실제 사용 언어 `lang` 포함.
+- **법령 = 공식 영문**: 법제처 영문법령 Open API(`target=elaw`) 적재 `articles_en` → 법령명·조문 **공식 번역 그대로** 인용(환각·오역 방지). `ChatSource.is_official_en=true`.
+- **판례·해석례·가이드라인 = 비공식 번역**: 공식 영문이 없어 LLM이 즉석 번역, `(unofficial translation)` 표기.
+
+**② 영어 문서검토** (`/documents/review/en*`) — 영어 문서를 받지만 **검토자는 한국**이라:
+- **분석(issue·reason·risk_level)은 한국어** — 한국 컴플라이언스 담당자가 읽음
+- **교정문(suggestion=after)은 영어** — 영어 문서에 그대로 다시 넣을 수 있게(문서 언어를 따라감)
+- 영어 문서도 올바르게 분류되도록 `classify.py`에 영어 키워드(event/discount/testimonial/privacy policy/terms of service 등) 보강. 내부적으로 `review_segments(suggestion_lang="en")`.
 
 **영문 법령 적재** (최초 1회 / 개정 반영 시):
 ```bash
 LAW_OC=H-Lab python3 scripts/ingest_elaw.py     # 4대법+시행령/규칙 영문 조문 → articles_en
 ```
 > ⚠️ 한계: ① 영문판은 한국어 개정보다 **시행일이 뒤처질 수 있음**(`articles_en.eng_effective` 참고). ② Citation Firewall 정규식은 한국어 인용 기준이라 **영어 답변에선 검증 적중이 낮음**(근거 자체는 공식 영문이라 신뢰 가능). ③ 일부 시행규칙은 공식 영문 없음 → `[KO src]`로 표기.
+
+### 프론트 연동 — 영어 토글
+
+프론트의 **영어 토글(EN ⇄ KR)** 상태에 따라 **호출 경로만 바꾸면** 됩니다. 요청/응답 바디 형태는 한국어판과 **동일**하고, `lang` 파라미터는 더 넘기지 않아도 됩니다(엔드포인트가 언어를 결정).
+
+| 화면/액션 | 토글 OFF(한국어) | 토글 ON(영어) |
+|---|---|---|
+| 챗봇(스트리밍) | `POST /chat/stream` | `POST /chat/en/stream` |
+| 챗봇(단발) | `POST /chat` | `POST /chat/en` |
+| 체크리스트 | `POST /chat/checklist` | `POST /chat/en/checklist` |
+| PDF 검토(단발) | `POST /documents/review` | `POST /documents/review/en` |
+| PDF 검토(SSE) | `POST /documents/review/stream` | `POST /documents/review/en/stream` |
+
+```js
+// 토글 상태 → 경로 prefix 만 분기 (바디·파싱 로직은 한/영 공용)
+const en = isEnglish;                       // 영어 토글 boolean
+const chatPath   = en ? "/chat/en/stream"          : "/chat/stream";
+const reviewPath = en ? "/documents/review/en"     : "/documents/review";
+
+// 챗봇 — SSE 파싱(sources→token→done)·answer_segments 처리 동일
+await fetch(`${BASE}${chatPath}`, {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ question, history, top_k: 8 }),   // lang 불필요
+});
+
+// PDF — multipart 동일, 경로만 /en
+const fd = new FormData(); fd.append("file", file);
+await fetch(`${BASE}${reviewPath}`, { method: "POST", body: fd });
+```
+
+**언어별 출력 차이(프론트가 알아둘 것):**
+- **영어 챗봇**: `answer`·`sources` 모두 영어, 법령은 `is_official_en:true`(공식 영문), `label_en`/`snippet_en` 사용. 그 외 출처는 비공식 번역.
+- **영어 PDF**: `findings[].issue`·`reason`은 **한국어**(한국 검토자용), `suggestion`(교정문)은 **영어**. 좌우 before/after·하이라이트(page·bbox) 렌더는 한국어판과 동일.
+- 호출 구조는 그대로 React→Node→FastAPI. Node는 `/api/rag/*` 패스스루라 `/chat/en*`·`/documents/review/en*`도 그대로 전달(챗봇은 product API 경유).
 
 ## 검색 동작 (graceful degradation)
 
