@@ -1,6 +1,12 @@
-import { useState, type CSSProperties } from 'react'
-import { mockChecklist } from '../mocks/mockChecklist'
-import type { ChecklistItem, ChecklistStatus } from '../types/checklist'
+import { useEffect, useState } from 'react'
+import { getRooms, getChats } from '../api/chat'
+import { generateChecklist } from '../api/checklistApi'
+import type {
+  ChecklistItem,
+  ChecklistStatus,
+  ChecklistResponse,
+  ChatTurn,
+} from '../types/checklist'
 
 const NAVY = '#14304A'
 const SUBBLUE = '#4A90D9'
@@ -18,11 +24,88 @@ const statusMeta: Record<ChecklistStatus, { label: string; color: string }> = {
 }
 
 export default function Checklist() {
-  // 백엔드 500 고쳐지면 generateChecklist(history) 결과로 교체
-  const [data] = useState(mockChecklist)
+  const [data, setData] = useState<ChecklistResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [checked, setChecked] = useState<Record<string, boolean>>({})
 
+  useEffect(() => {
+    let alive = true
+
+    const run = async () => {
+      try {
+        setLoading(true)
+        setError('')
+
+        // 1. 가장 최근 상담방 찾기
+        const roomsRes = await getRooms()
+        const rooms = roomsRes?.data ?? []
+        if (rooms.length === 0) {
+          if (alive) setError('분석할 상담 내역이 없어요. 먼저 챗봇에서 상담을 진행해주세요.')
+          return
+        }
+        // 최신 방 (목록 첫 번째가 최신이라고 가정, 아니면 created_at 정렬)
+        const latestRoom = rooms[0]
+
+        // 2. 그 방의 대화 가져와서 ChatTurn[]으로 변환
+        const chatsRes = await getChats(latestRoom.room_id)
+        const chats = chatsRes?.data ?? []
+        const history: ChatTurn[] = chats.map((c: { speaker_type: string; chat_text: string }) => ({
+          role: c.speaker_type === 'USER' ? 'user' : 'assistant',
+          content: c.chat_text,
+        }))
+
+        if (history.length === 0) {
+          if (alive) setError('대화 내역이 비어 있어요. 챗봇에서 질문을 먼저 해주세요.')
+          return
+        }
+
+        // 3. 체크리스트 생성 요청 (수~수십 초 소요)
+        const res = await generateChecklist({ history, lang: 'ko' })
+        if (alive) setData(res)
+      } catch (e) {
+        console.error('체크리스트 생성 실패:', e)
+        if (alive) setError('체크리스트 생성에 실패했어요. 잠시 후 다시 시도해주세요.')
+      } finally {
+        if (alive) setLoading(false)
+      }
+    }
+
+    run()
+    return () => {
+      alive = false
+    }
+  }, [])
+
   const toggle = (id: string) => setChecked((c) => ({ ...c, [id]: !c[id] }))
+
+  // 로딩 상태
+  if (loading) {
+    return (
+      <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
+        <div className="mx-auto flex max-w-2xl flex-col items-center justify-center py-32">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200"
+               style={{ borderTopColor: NAVY }} />
+          <p className="mt-4 text-sm font-medium" style={{ color: NAVY }}>체크리스트 생성 중…</p>
+          <p className="mt-1 text-xs text-slate-400">대화를 분석하고 있어요. 수십 초 걸릴 수 있어요.</p>
+        </div>
+      </div>
+    )
+  }
+
+  // 에러 / 빈 상태
+  if (error || !data) {
+    return (
+      <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
+        <div className="mx-auto max-w-2xl">
+          <h1 className="mb-6 text-2xl font-bold" style={{ color: NAVY }}>법령 준수 체크리스트</h1>
+          <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
+            <p className="text-sm text-slate-500">{error || '데이터를 불러오지 못했어요.'}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const s = data.checklist_summary
   const doneCount = data.checklist.filter((i) => checked[i.id] || i.status === 'ok').length
@@ -47,7 +130,7 @@ export default function Checklist() {
               <span className="text-slate-500">{doneCount} / {s.total}</span>
             </div>
             <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100">
-              <div className="h-full rounded-full" style={{ width: `${(doneCount / s.total) * 100}%`, backgroundColor: TEAL }} />
+              <div className="h-full rounded-full" style={{ width: `${s.total ? (doneCount / s.total) * 100 : 0}%`, backgroundColor: TEAL }} />
             </div>
           </div>
           <div className="flex gap-3 text-center text-xs">
