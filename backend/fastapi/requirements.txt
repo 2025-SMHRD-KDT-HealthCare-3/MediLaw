@@ -16,7 +16,9 @@ python-dotenv==1.0.1
 # 주의: gpt-5.5 / reasoning_effort(추론 강도) 파라미터는 openai>=2.x 필요.
 #       1.57.0 등 구버전은 reasoning_effort 미지원 → 챗봇 생성 호출이 깨짐.
 openai==2.41.1
-numpy==2.2.0
+numpy==2.2.0          # 벡터 코사인 폴백(full DB 전용). slim DB엔 embedding 컬럼이 없어 폴백 불가.
+# ⚠️ sqlite-vec 필수: 배포되는 medilaw.db 는 slim(용량 축소) 버전이라 벡터가 chunk_vec 에만
+#    저장됨. sqlite-vec 가 없으면 벡터검색 불가 → FTS(키워드) 전용으로 강등됨(에러는 아님).
 sqlite-vec==0.1.6
 
 # 기능 4 — MCP Server (FastAPI에 /mcp SSE로 마운트)
