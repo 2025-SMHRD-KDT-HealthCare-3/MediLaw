@@ -309,7 +309,10 @@ app.use(
 )
 
 app.use('/api/rag', (req, res, next) => {
-  if (['/chat', '/chat/stream'].includes(req.path)) {
+  // 한/영 챗봇은 저장(이력·근거·검증)을 위해 product API를 거쳐야 한다.
+  // 영어판(/chat/en, /chat/en/stream)도 동일하게 직통 차단 → product의 ai-answer(lang=en) 사용.
+  // (검토·체크리스트 등 무상태 기능은 /api/rag 직통 허용)
+  if (['/chat', '/chat/stream', '/chat/en', '/chat/en/stream'].includes(req.path)) {
     res.status(409).json(
       errorPayload(
         '챗봇 요청은 저장을 위해 product API를 통해 호출해야 합니다.',

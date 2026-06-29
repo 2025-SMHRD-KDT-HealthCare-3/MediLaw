@@ -49,10 +49,13 @@ def build_hms_history(db: Session, room_id: int, *, exclude_chat_id: int | None 
     return history[-HISTORY_LIMIT:]
 
 
-def _call_hms_chat(question: str, history: list[dict]) -> dict:
+def _call_hms_chat(question: str, history: list[dict], lang: str = "ko") -> dict:
+    # 영어 입력이면 HMS 영어 전용 챗봇 엔드포인트로(영문 답변 + 공식 영문조문).
+    is_en = (lang or "").lower() == "en"
+    path = "/chat/en" if is_en else "/chat"
     data = hms_client.post_json(
-        "/chat",
-        {"question": question, "history": history, "top_k": 8, "lang": "auto"},
+        path,
+        {"question": question, "history": history, "top_k": 8, "lang": "en" if is_en else "ko"},
         timeout=120,
     )
     if not isinstance(data, dict) or not data.get("answer"):
@@ -122,8 +125,13 @@ def hms_verification_output(citation_check: dict | None) -> list[dict]:
     return output if isinstance(output, list) else []
 
 
-def create_ai_answer(db: Session, room_id: int, current_user: User, question: str) -> dict:
-    """Persist the user question first, then call HMS and persist the answer."""
+def create_ai_answer(
+    db: Session, room_id: int, current_user: User, question: str, lang: str = "ko"
+) -> dict:
+    """Persist the user question first, then call HMS and persist the answer.
+
+    lang: 'ko'(기본)면 한국어 챗봇(/chat), 'en'이면 영어 전용 챗봇(/chat/en) 호출.
+    """
     ensure_room_open(db, room_id, current_user)
     try:
         user_chat = chat_repository.create(
@@ -140,7 +148,7 @@ def create_ai_answer(db: Session, room_id: int, current_user: User, question: st
 
     history = build_hms_history(db, room_id, exclude_chat_id=user_chat.chat_id)
     try:
-        hms_response = _call_hms_chat(question, history)
+        hms_response = _call_hms_chat(question, history, lang)
     except HTTPException:
         try:
             failure_chat = chat_repository.create(

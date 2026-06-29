@@ -44,6 +44,7 @@ def _json_text(value: Any) -> str | None:
 
 def _call_hms_document_review(
     *,
+    input_language: str,
     text: str | None,
     file_name: str | None,
     file_content: bytes | None,
@@ -60,8 +61,10 @@ def _call_hms_document_review(
             )
         }
 
+    # 영어 입력이면 HMS 영어 전용 문서검토 엔드포인트로(분석=한글, 교정문=영어).
+    path = "/documents/review/en" if (input_language or "").lower() == "en" else "/documents/review"
     return hms_client.post_multipart(
-        "/documents/review",
+        path,
         data=data,
         files=files,
         timeout=hms_client.DOCUMENT_TIMEOUT,
@@ -124,6 +127,7 @@ def review_document_and_create(
         ensure_room_open(db, room_id, current_user)
 
     hms_response = _call_hms_document_review(
+        input_language=input_language,
         text=text,
         file_name=file_name,
         file_content=file_content,
