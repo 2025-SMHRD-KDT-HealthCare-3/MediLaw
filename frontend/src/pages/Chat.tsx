@@ -219,7 +219,7 @@ export default function Chat() {
           </button>
         </div>
         <div className="px-3 pb-1 pt-1 text-[11px] font-semibold tracking-wide text-white/50">{t('chat.roomListTitle')}</div>
-        <div className="flex-1 overflow-y-auto px-2 pb-3">
+        <div className="scroll-navy flex-1 overflow-y-auto overflow-x-hidden px-2 pb-3">
           {rooms.length === 0 && (
             <p className="px-2 py-4 text-xs text-white/40">{t('chat.noRooms')}</p>
           )}

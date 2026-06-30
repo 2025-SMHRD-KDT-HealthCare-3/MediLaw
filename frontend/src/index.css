@@ -11,3 +11,27 @@
   --color-warning: #E8A33D;
   --color-error: #D9534F;
 }
+
+/* navy 사이드바용 스크롤바 — 기본 밝은 스크롤바가 navy 위에서 튀고 코너가 삐져나오는 것 보정.
+   트랙·코너는 투명, 막대는 옅은 흰색으로 navy에 녹임. (webkit + firefox) */
+.scroll-navy {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+.scroll-navy::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-navy::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-navy::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+}
+.scroll-navy::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+.scroll-navy::-webkit-scrollbar-corner {
+  background: transparent;
+}
