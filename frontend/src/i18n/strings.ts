@@ -68,6 +68,10 @@ export const strings: Record<Lang, Record<string, string>> = {
     'ad.noItems': '검토 항목이 없습니다.',
     'ad.evidenceLabel': '근거 법령',
     'ad.revisionLabel': '수정 추천 문구',
+    'ad.genChecklist': '체크리스트 생성',
+    'ad.genChecklistLoading': '체크리스트 생성 중…',
+    'ad.checklistFailed': '체크리스트 생성에 실패했어요. 잠시 후 다시 시도해주세요.',
+    'ad.checklistRoomDesc': '광고검토에서 생성한 체크리스트',
 
     // 체크리스트 (Checklist.tsx)
     'checklist.title': '법령 준수 체크리스트',
@@ -279,6 +283,10 @@ export const strings: Record<Lang, Record<string, string>> = {
     'ad.noItems': 'No review items.',
     'ad.evidenceLabel': 'Supporting laws',
     'ad.revisionLabel': 'Suggested revision',
+    'ad.genChecklist': 'Generate checklist',
+    'ad.genChecklistLoading': 'Generating checklist…',
+    'ad.checklistFailed': 'Failed to generate the checklist. Please try again shortly.',
+    'ad.checklistRoomDesc': 'Checklist generated from ad review',
 
     // Checklist (Checklist.tsx)
     'checklist.title': 'Legal Compliance Checklist',

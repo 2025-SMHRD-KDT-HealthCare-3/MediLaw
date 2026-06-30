@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { getRooms } from '../api/chat'
 import { getRoomSummaries, createRoomSummary, parseSummary, type ChecklistView } from '../api/checklistApi'
 import { useLang } from '../i18n/LanguageContext'
@@ -21,6 +22,9 @@ const statusMeta: Record<ChecklistStatus, { labelKey: string; color: string }> =
 
 export default function Checklist() {
   const { t } = useLang()
+  const [searchParams] = useSearchParams()
+  // 광고검토 등에서 ?roomId=로 들어오면 그 방의 저장본을 보여준다(없으면 최신 방).
+  const roomIdParam = searchParams.get('roomId')
   const [data, setData] = useState<ChecklistView | null>(null)
   const [roomId, setRoomId] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)        // 진입 시 DB 조회
@@ -37,16 +41,21 @@ export default function Checklist() {
         setLoading(true)
         setError('')
 
-        const roomsRes = await getRooms()
-        const rooms = roomsRes?.data ?? []
-        if (rooms.length === 0) {
-          if (alive) setError(t('checklist.noRoom'))
-          return
+        let targetRoomId: number
+        if (roomIdParam) {
+          targetRoomId = Number(roomIdParam)
+        } else {
+          const roomsRes = await getRooms()
+          const rooms = roomsRes?.data ?? []
+          if (rooms.length === 0) {
+            if (alive) setError(t('checklist.noRoom'))
+            return
+          }
+          targetRoomId = rooms[0].room_id
         }
-        const latest = rooms[0]
-        if (alive) setRoomId(latest.room_id)
+        if (alive) setRoomId(targetRoomId)
 
-        const summaries = await getRoomSummaries(latest.room_id)
+        const summaries = await getRoomSummaries(targetRoomId)
         if (alive) setData(summaries.length > 0 ? parseSummary(summaries[0]) : null)
       } catch (e) {
         console.error('체크리스트 조회 실패:', e)
@@ -61,7 +70,7 @@ export default function Checklist() {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [roomIdParam])
 
   // 버튼: 생성 + 즉시 저장 → 화면 표시. 재진입 시엔 위 load가 DB에서 그대로 불러온다.
   const handleGenerate = async () => {
