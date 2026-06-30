@@ -58,8 +58,10 @@ const sameSiteEnv = (name: string, fallback: SameSiteValue): SameSiteValue => {
 const ACCESS_TOKEN_EXPIRE_MINUTES = positiveNumberEnv('ACCESS_TOKEN_EXPIRE_MINUTES', 30)
 const SESSION_COOKIE_MAX_AGE_MS = ACCESS_TOKEN_EXPIRE_MINUTES * 60_000
 const LOGIN_TIMEOUT_MS = positiveNumberEnv('LOGIN_TIMEOUT_MS', 15_000)
-const PRODUCT_PROXY_TIMEOUT_MS = positiveNumberEnv('PRODUCT_PROXY_TIMEOUT_MS', 190_000)
-const RAG_PROXY_TIMEOUT_MS = positiveNumberEnv('RAG_PROXY_TIMEOUT_MS', 190_000)
+// product 가 HMS 문서검토를 최대 300s 기다리므로(hms_client.DOCUMENT_TIMEOUT), node 는 그보다 커야
+// 응답을 끝까지 받아온다. 안 그러면 node 가 먼저 끊어 504가 난다.
+const PRODUCT_PROXY_TIMEOUT_MS = positiveNumberEnv('PRODUCT_PROXY_TIMEOUT_MS', 330_000)
+const RAG_PROXY_TIMEOUT_MS = positiveNumberEnv('RAG_PROXY_TIMEOUT_MS', 330_000)
 const FRONTEND_ORIGINS = csvEnv('FRONTEND_ORIGIN', FRONTEND_ORIGIN)
 const SESSION_COOKIE_SAME_SITE = sameSiteEnv('SESSION_COOKIE_SAME_SITE', 'lax')
 const SESSION_COOKIE_SECURE = booleanEnv(
