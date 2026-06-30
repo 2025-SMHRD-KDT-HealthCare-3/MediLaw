@@ -124,16 +124,20 @@ export default function Chat() {
   const handleDeleteRoom = async (e: React.MouseEvent, id: number) => {
     e.stopPropagation()
     if (!window.confirm(t('chat.confirmDelete'))) return
+    // 낙관적 업데이트: 화면에서 먼저 즉시 제거(바로 반영) → 실패하면 되돌리고 알림.
+    const prev = rooms
+    const rest = rooms.filter((r) => r.room_id !== id)
+    setRooms(rest)
+    if (id === roomId) {
+      if (rest.length > 0) openRoom(rest[0].room_id)
+      else handleNewChat()
+    }
     try {
       await deleteRoom(id)
-      const rest = rooms.filter((r) => r.room_id !== id)
-      setRooms(rest)
-      if (id === roomId) {
-        if (rest.length > 0) openRoom(rest[0].room_id)
-        else handleNewChat()
-      }
     } catch (err) {
       console.error('대화 삭제 실패:', err)
+      setRooms(prev) // 복구
+      alert(friendlyError(err, t, 'chat.deleteFailed'))
     }
   }
 
