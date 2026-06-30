@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { reviewAdCopy } from '../api/chat'
+import { useNavigate } from 'react-router-dom'
+import { reviewAdCopy, createRoom } from '../api/chat'
+import { createRoomSummary } from '../api/checklistApi'
 import { useLang } from '../i18n/LanguageContext'
 
 interface Citation {
@@ -38,11 +40,13 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB (백엔드 제한)
 
 export default function AdReview() {
   const { lang, t } = useLang()
+  const navigate = useNavigate()
   const [text, setText] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ParsedResult | null>(null)
   const [error, setError] = useState('')
+  const [genLoading, setGenLoading] = useState(false)
 
   const handleReview = async () => {
     // 텍스트 또는 파일 중 하나는 있어야 함
@@ -103,6 +107,44 @@ export default function AdReview() {
       setError(err.response?.data?.message ?? err.message ?? t('ad.reviewFailed'))
     } finally {
       setLoading(false)
+    }
+  }
+
+  // 광고검토 결과(체크리스트)를 저장하고 체크리스트 대시보드로 이동.
+  // 화면에 보인 검토 항목을 그대로 저장하므로 HMS 재생성/추가 비용이 없다.
+  const handleGenerateChecklist = async () => {
+    if (!result || genLoading) return
+    try {
+      setGenLoading(true)
+      setError('')
+      // tb_summary는 방(room)에 속해야 하므로, 이 광고검토용 방을 하나 만든다.
+      const title = (result.inputText || file?.name || t('ad.title')).slice(0, 50)
+      const roomRes = await createRoom(title, t('ad.checklistRoomDesc'))
+      const roomId = roomRes?.data?.room_id
+      if (!roomId) throw new Error('room create failed')
+      // 검토 항목을 체크리스트 저장 형식으로 변환(저장본 파서가 기대하는 필드만 담음)
+      const items = result.checklist.map((it) => ({
+        id: it.id,
+        title: it.title,
+        reason: it.reason ?? '',
+        status: it.status ?? 'na',
+        citations: (it.citations ?? []).map((c) => ({
+          n: c.n,
+          label: c.label,
+          source_url: c.source_url ?? '',
+        })),
+        note: '',
+      }))
+      await createRoomSummary(roomId, {
+        checklist_item: JSON.stringify(items),
+        summary: JSON.stringify({ checklist_summary: result.summary }),
+      })
+      navigate(`/checklist?roomId=${roomId}`)
+    } catch (err: any) {
+      console.error('체크리스트 생성 실패:', err)
+      setError(err.response?.data?.message ?? err.message ?? t('ad.checklistFailed'))
+    } finally {
+      setGenLoading(false)
     }
   }
 
@@ -246,6 +288,15 @@ export default function AdReview() {
                 <p className="text-sm font-medium text-navy">{result.revision}</p>
               </div>
             )}
+
+            {/* 검토 결과를 체크리스트로 저장 → 대시보드에서 불러오기 */}
+            <button
+              onClick={handleGenerateChecklist}
+              disabled={genLoading}
+              className="w-full rounded-lg border border-navy bg-white px-6 py-2.5 text-sm font-medium text-navy hover:bg-navy hover:text-white disabled:opacity-50"
+            >
+              {genLoading ? t('ad.genChecklistLoading') : t('ad.genChecklist')}
+            </button>
           </div>
         )}
       </div>

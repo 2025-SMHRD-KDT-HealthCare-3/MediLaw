@@ -28,10 +28,14 @@ export async function getRoomSummaries(roomId: number | string): Promise<Summary
   return res.data?.data ?? []
 }
 
-// 체크리스트 생성 + 즉시 저장 — 서버가 방 대화이력으로 생성해 tb_summary에 저장하고 그 행을 돌려준다.
-// (이미 미확정 요약이 있으면 서버가 재생성 없이 기존 것을 반환 → 중복/재생성 방지)
-export async function createRoomSummary(roomId: number | string): Promise<SummaryRecord> {
-  const res = await api.post(`/rooms/${roomId}/summaries`, {})
+// 체크리스트 생성/저장 → tb_summary 행을 돌려준다. (이미 미확정 요약이 있으면 서버가 그걸 반환)
+//  - payload 없이 호출(대시보드): 서버가 방 대화이력으로 HMS 생성해 저장.
+//  - payload.checklist_item 전달(광고검토): 그 체크리스트를 HMS 재생성 없이 그대로 저장.
+export async function createRoomSummary(
+  roomId: number | string,
+  payload?: { checklist_item?: string; summary?: string },
+): Promise<SummaryRecord> {
+  const res = await api.post(`/rooms/${roomId}/summaries`, payload ?? {})
   return res.data?.data
 }
 
