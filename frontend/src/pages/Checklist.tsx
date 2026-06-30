@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { getRooms } from '../api/chat'
-import { getRoomSummaries, createRoomSummary, parseSummary, type ChecklistView } from '../api/checklistApi'
+import { getRoomSummaries, parseSummary, type ChecklistView } from '../api/checklistApi'
 import { useLang } from '../i18n/LanguageContext'
 import type { ChecklistItem, ChecklistStatus } from '../types/checklist'
 import LoadingWait from '../components/LoadingWait'
@@ -28,9 +28,7 @@ export default function Checklist() {
   // 광고검토 등에서 ?roomId=로 들어오면 그 방의 저장본을 보여준다(없으면 최신 방).
   const roomIdParam = searchParams.get('roomId')
   const [data, setData] = useState<ChecklistView | null>(null)
-  const [roomId, setRoomId] = useState<number | null>(null)
-  const [loading, setLoading] = useState(true)        // 진입 시 DB 조회
-  const [generating, setGenerating] = useState(false) // 생성 진행
+  const [loading, setLoading] = useState(true) // 진입 시 DB 조회 (이 페이지는 조회 전용 — 생성 안 함)
   const [error, setError] = useState('')
   const [checked, setChecked] = useState<Record<string, boolean>>({})
 
@@ -55,8 +53,6 @@ export default function Checklist() {
           }
           targetRoomId = rooms[0].room_id
         }
-        if (alive) setRoomId(targetRoomId)
-
         const summaries = await getRoomSummaries(targetRoomId)
         if (alive) setData(summaries.length > 0 ? parseSummary(summaries[0]) : null)
       } catch (e) {
@@ -74,24 +70,6 @@ export default function Checklist() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomIdParam])
 
-  // 버튼: 생성 + 즉시 저장 → 화면 표시. 재진입 시엔 위 load가 DB에서 그대로 불러온다.
-  const handleGenerate = async () => {
-    if (!roomId || generating) return
-    try {
-      setGenerating(true)
-      setError('')
-      const rec = await createRoomSummary(roomId)
-      setData(parseSummary(rec))
-    } catch (e: unknown) {
-      console.error('체크리스트 생성 실패:', e)
-      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
-      // 방에 대화이력이 없으면 백엔드가 'room has no chat history'를 반환
-      setError(msg?.includes('history') ? t('checklist.emptyHistory') : friendlyError(e, t, 'checklist.genFailed'))
-    } finally {
-      setGenerating(false)
-    }
-  }
-
   const toggle = (id: string) => setChecked((c) => ({ ...c, [id]: !c[id] }))
 
   // 공통 헤더 (제목 줄)
@@ -104,7 +82,7 @@ export default function Checklist() {
   // 진입 로딩 (DB 조회 중)
   if (loading) {
     return (
-      <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
+      <div className="min-h-[calc(100vh-60px)] bg-[#F7F8FA] px-6 py-8">
         <div className="mx-auto max-w-2xl">
           <Header />
           <LoadingWait compact title={t('checklist.loadingSaved')} />
@@ -113,56 +91,28 @@ export default function Checklist() {
     )
   }
 
-  // 생성 진행 중
-  if (generating) {
-    return (
-      <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
-        <div className="mx-auto max-w-2xl">
-          <Header />
-          <LoadingWait title={t('checklist.generating')} hint={t('checklist.generatingSub')} />
-        </div>
-      </div>
-    )
-  }
-
   // 에러 상태
   if (error) {
     return (
-      <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
+      <div className="min-h-[calc(100vh-60px)] bg-[#F7F8FA] px-6 py-8">
         <div className="mx-auto max-w-2xl">
           <Header />
           <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
             <p className="text-sm text-slate-500">{error}</p>
-            {roomId && (
-              <button
-                onClick={handleGenerate}
-                className="mt-4 rounded-lg px-5 py-2 text-sm font-medium text-white"
-                style={{ backgroundColor: NAVY }}
-              >
-                {t('checklist.generate')}
-              </button>
-            )}
           </div>
         </div>
       </div>
     )
   }
 
-  // 저장된 체크리스트가 없음 → 생성 안내 + 버튼 (자동 생성하지 않음)
+  // 저장된 체크리스트가 없음 → 여기선 생성하지 않고(방문마다 비용 X) 광고검토에서 만들도록 안내만
   if (!data) {
     return (
-      <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
+      <div className="min-h-[calc(100vh-60px)] bg-[#F7F8FA] px-6 py-8">
         <div className="mx-auto max-w-2xl">
           <Header />
           <div className="rounded-xl border border-slate-200 bg-white p-10 text-center">
             <p className="text-sm text-slate-500">{t('checklist.empty')}</p>
-            <button
-              onClick={handleGenerate}
-              className="mt-5 rounded-lg px-6 py-2.5 text-sm font-medium text-white"
-              style={{ backgroundColor: NAVY }}
-            >
-              {t('checklist.generate')}
-            </button>
           </div>
         </div>
       </div>
@@ -173,7 +123,7 @@ export default function Checklist() {
   const doneCount = data.checklist.filter((i) => checked[i.id] || i.status === 'ok').length
 
   return (
-    <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
+    <div className="min-h-[calc(100vh-60px)] bg-[#F7F8FA] px-6 py-8">
       <div className="mx-auto max-w-2xl">
         {/* 헤더 */}
         <div className="mb-1 flex items-center justify-between">

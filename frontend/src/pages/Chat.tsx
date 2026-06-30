@@ -33,6 +33,7 @@ export default function Chat() {
   const [roomId, setRoomId] = useState<number | null>(null) // null = 아직 안 보낸 새 채팅
   const [loading, setLoading] = useState(false) // AI 답변 대기
   const [switching, setSwitching] = useState(false) // 방 전환(대화 불러오기)
+  const [sidebarOpen, setSidebarOpen] = useState(true) // 사이드바 접기/펼치기
   const navigate = useNavigate()
 
   const mapChats = (chats: { chat_id: number; speaker_type: string; chat_text: string; chatted_at?: string }[]): ChatMessageType[] =>
@@ -203,7 +204,11 @@ export default function Chat() {
   return (
     <div className="flex bg-[#F7F8FA]" style={{ height: 'calc(100vh - 60px)' }}>
       {/* 사이드바 — 대화 목록 (실제 챗봇처럼 이전 대화 들어가기 / 새 채팅) */}
-      <aside className="flex w-64 flex-col border-r border-gray-200 bg-white">
+      <aside
+        className={`flex flex-col border-r border-slate-200 bg-[#EEF2F7] transition-all duration-200 ${
+          sidebarOpen ? 'w-64' : 'w-0 overflow-hidden border-r-0'
+        }`}
+      >
         <div className="p-3">
           <button
             onClick={handleNewChat}
@@ -221,10 +226,9 @@ export default function Chat() {
             <div
               key={r.room_id}
               onClick={() => handleSelectRoom(r.room_id)}
-              className={`group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 ${
-                r.room_id === roomId ? '' : 'hover:bg-gray-50'
+              className={`group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 transition ${
+                r.room_id === roomId ? 'bg-white shadow-sm' : 'hover:bg-white/60'
               }`}
-              style={{ backgroundColor: r.room_id === roomId ? '#E7F6F8' : undefined }}
             >
               <div className="min-w-0">
                 <p className="truncate text-sm text-slate-700">{r.room_title || t('chat.untitled')}</p>
@@ -244,7 +248,15 @@ export default function Chat() {
 
       {/* 메인 — 현재 대화 */}
       <div className="flex flex-1 flex-col">
-        <header className="flex items-center border-b border-gray-200 bg-navy px-6 py-4">
+        <header className="flex items-center gap-3 border-b border-gray-200 bg-navy px-6 py-4">
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            title={t('common.toggleSidebar')}
+            aria-label={t('common.toggleSidebar')}
+            className="text-lg leading-none text-white/90 hover:text-aqua"
+          >
+            ☰
+          </button>
           <h1 className="text-lg font-bold text-white">{t('chat.title')}</h1>
         </header>
 
