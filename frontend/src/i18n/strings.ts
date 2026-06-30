@@ -26,7 +26,6 @@ export const strings: Record<Lang, Record<string, string>> = {
 
     // 챗봇 (Chat.tsx)
     'chat.title': 'AI 의료법 질의응답',
-    'chat.subtitle': '답이 아니라 상태를 관리하는 도구',
     'chat.newChat': '새 채팅',
     'chat.empty': '의료법 관련 질문을 입력해 상담을 시작하세요.',
     'chat.generating': '답변 생성 중…',
@@ -275,7 +274,6 @@ export const strings: Record<Lang, Record<string, string>> = {
 
     // Chat (Chat.tsx)
     'chat.title': 'AI Medical Law Q&A',
-    'chat.subtitle': 'A tool that manages your compliance status, not just answers',
     'chat.newChat': 'New chat',
     'chat.empty': 'Ask a question about medical law to start a consultation.',
     'chat.generating': 'Generating a response…',
