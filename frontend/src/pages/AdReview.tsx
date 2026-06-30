@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { reviewAdCopy, createRoom } from '../api/chat'
 import { createRoomSummary } from '../api/checklistApi'
 import { useLang } from '../i18n/LanguageContext'
+import AdReviewGraph from '../components/AdReviewGraph'
 
 interface Citation {
   n: number
@@ -48,6 +49,7 @@ export default function AdReview() {
   const [result, setResult] = useState<ParsedResult | null>(null)
   const [error, setError] = useState('')
   const [genLoading, setGenLoading] = useState(false)
+  const [view, setView] = useState<'list' | 'graph'>('list')
 
   const handleReview = async () => {
     // 텍스트 또는 파일 중 하나는 있어야 함
@@ -223,23 +225,59 @@ export default function AdReview() {
 
         {result && (
           <div className="mt-6 space-y-4">
-            {/* 요약 */}
-            {result.summary && (
-              <div className="flex gap-2 text-xs">
-                <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">
-                  {t('ad.statusTodo')} {result.summary.todo}
-                </span>
-                <span className="rounded-full bg-red-50 px-3 py-1 text-red-700">
-                  {t('ad.statusRisk')} {result.summary.risk}
-                </span>
-                <span className="rounded-full bg-teal-50 px-3 py-1 text-teal-700">
-                  {t('ad.statusOk')} {result.summary.ok}
-                </span>
+            {/* 요약 + 보기 전환(목록 / 관계도) */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              {result.summary ? (
+                <div className="flex gap-2 text-xs">
+                  <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">
+                    {t('ad.statusTodo')} {result.summary.todo}
+                  </span>
+                  <span className="rounded-full bg-red-50 px-3 py-1 text-red-700">
+                    {t('ad.statusRisk')} {result.summary.risk}
+                  </span>
+                  <span className="rounded-full bg-teal-50 px-3 py-1 text-teal-700">
+                    {t('ad.statusOk')} {result.summary.ok}
+                  </span>
+                </div>
+              ) : (
+                <span />
+              )}
+              <div className="inline-flex rounded-lg border border-gray-200 p-0.5 text-xs">
+                <button
+                  onClick={() => setView('list')}
+                  className={`rounded-md px-3 py-1 font-medium ${view === 'list' ? 'bg-navy text-white' : 'text-slate-500 hover:text-navy'}`}
+                >
+                  {t('ad.viewList')}
+                </button>
+                <button
+                  onClick={() => setView('graph')}
+                  className={`rounded-md px-3 py-1 font-medium ${view === 'graph' ? 'bg-navy text-white' : 'text-slate-500 hover:text-navy'}`}
+                >
+                  {t('ad.viewGraph')}
+                </button>
               </div>
+            </div>
+
+            {/* 관계도(마인드맵) 보기 */}
+            {view === 'graph' && (
+              <>
+                <AdReviewGraph
+                  inputText={result.inputText}
+                  items={result.checklist}
+                  centerLabel={t('ad.graphInput')}
+                  emptyLabel={t('ad.statusOk')}
+                />
+                {/* 색상 범례 */}
+                <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+                  <span className="flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#D9534F' }} />{t('ad.statusRisk')}</span>
+                  <span className="flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#E8A33D' }} />{t('ad.statusTodo')}</span>
+                  <span className="flex items-center gap-1"><i className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: '#13AAA0' }} />{t('ad.statusOk')}</span>
+                </div>
+              </>
             )}
 
-            {/* 검토 항목들 */}
-            {result.checklist.length === 0 ? (
+            {/* 목록 보기 — 검토 항목들 */}
+            {view === 'list' && (result.checklist.length === 0 ? (
               <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-slate-500">
                 {t('ad.noItems')}
               </div>
@@ -293,7 +331,7 @@ export default function AdReview() {
                   </div>
                 )
               })
-            )}
+            ))}
 
             {/* 수정 전후 비교 — 문서 전체 원문과 수정본을 한 화면에서 대조 */}
             {result.revision && result.revision !== result.inputText && (
