@@ -47,26 +47,14 @@ export default function Chat() {
 
   const loadRooms = async (): Promise<RoomItem[]> => {
     const res = await getRooms()
-    const base: { room_id: number; room_title: string; created_at?: string }[] = (res.data ?? []).map(
-      (r: { room_id: number; room_title: string; created_at?: string }) => ({
+    // 표시 제목은 백엔드가 한 번에 내려주는 preview(첫 질문) 우선, 없으면 room_title.
+    // (예전엔 방마다 getChats를 호출해 방이 많으면 rate limit 429가 났음 → 단일 호출로 변경)
+    const list: RoomItem[] = (res.data ?? []).map(
+      (r: { room_id: number; room_title: string; created_at?: string; preview?: string | null }) => ({
         room_id: r.room_id,
         room_title: r.room_title,
         created_at: r.created_at,
-      }),
-    )
-    // 실제 LLM 챗봇처럼 '첫 질문'을 제목으로 — 방마다 첫 사용자 메시지를 가져와 표시 제목으로 쓴다.
-    // (없으면 room_title 폴백) 기존 방까지 적용되도록 병렬 조회.
-    const list: RoomItem[] = await Promise.all(
-      base.map(async (r) => {
-        try {
-          const cr = await getChats(r.room_id)
-          const chats: { speaker_type: string; chat_text: string }[] = cr.data ?? []
-          const firstUser = chats.find((c) => c.speaker_type === 'USER')?.chat_text
-          const display = (firstUser && firstUser.trim().slice(0, 40)) || r.room_title || ''
-          return { ...r, display }
-        } catch {
-          return { ...r, display: r.room_title || '' }
-        }
+        display: (r.preview && r.preview.trim().slice(0, 40)) || r.room_title || '',
       }),
     )
     setRooms(list)
