@@ -12,12 +12,15 @@ from app.services import summary_service
 router = APIRouter(tags=["summaries"])
 
 
+# 체크리스트 생성·저장은 모든 로그인 사용자가 할 수 있다(admin 전용 아님).
+# 방 소유자만 자기 방에 생성하도록 service의 ensure_room_access가 막아주므로
+# require_admin 대신 get_current_user로 완화해도 안전하다.
 @router.post("/rooms/{room_id}/summaries")
 def create_summary(
     room_id: int,
     data: SummaryCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin),
+    current_user: User = Depends(get_current_user),
 ):
     summary = summary_service.create_summary(db, room_id, current_user, data)
     return success_response(jsonable_encoder(SummaryResponse.model_validate(summary)))
