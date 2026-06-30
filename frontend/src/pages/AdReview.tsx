@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { reviewAdCopy } from '../api/chat'
+import { useLang } from '../i18n/LanguageContext'
 
 interface Citation {
   n: number
@@ -22,11 +23,12 @@ interface ParsedResult {
   summary?: { total: number; todo: number; ok: number; risk: number; na: number }
 }
 
-const ITEM_STYLE: Record<string, { label: string; color: string }> = {
-  todo: { label: '확인 필요', color: '#E8A33D' },
-  risk: { label: '위반 소지', color: '#D9534F' },
-  ok: { label: '문제 없음', color: '#13AAA0' },
-  na: { label: '해당 없음', color: '#6B7280' },
+// status → 색 + 라벨 번역키 (라벨은 렌더 시 t()로 변환)
+const ITEM_STYLE: Record<string, { labelKey: string; color: string }> = {
+  todo: { labelKey: 'ad.statusTodo', color: '#E8A33D' },
+  risk: { labelKey: 'ad.statusRisk', color: '#D9534F' },
+  ok: { labelKey: 'ad.statusOk', color: '#13AAA0' },
+  na: { labelKey: 'ad.statusNa', color: '#6B7280' },
 }
 
 // 위험도(high/medium/low) → 화면 상태값 매핑
@@ -35,9 +37,9 @@ const RISK_MAP: Record<string, string> = { high: 'risk', medium: 'todo', low: 'o
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB (백엔드 제한)
 
 export default function AdReview() {
+  const { lang, t } = useLang()
   const [text, setText] = useState('')
   const [file, setFile] = useState<File | null>(null)
-  const [lang, setLang] = useState<'ko' | 'en'>('ko') // 입력 언어 (기본 한국어)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<ParsedResult | null>(null)
   const [error, setError] = useState('')
@@ -48,7 +50,7 @@ export default function AdReview() {
 
     // 파일 크기 체크
     if (file && file.size > MAX_FILE_SIZE) {
-      setError('파일 크기는 10MB 이하만 가능합니다.')
+      setError(t('ad.fileTooLarge'))
       return
     }
 
@@ -98,7 +100,7 @@ export default function AdReview() {
       })
     } catch (err: any) {
       console.error('광고검토 에러:', err)
-      setError(err.response?.data?.message ?? err.message ?? '검토에 실패했습니다.')
+      setError(err.response?.data?.message ?? err.message ?? t('ad.reviewFailed'))
     } finally {
       setLoading(false)
     }
@@ -107,48 +109,15 @@ export default function AdReview() {
   return (
     <div className="min-h-screen bg-[#F7F8FA] p-8">
       <div className="mx-auto max-w-2xl">
-        <h1 className="text-2xl font-bold text-navy mb-1">광고문구 검토</h1>
+        <h1 className="text-2xl font-bold text-navy mb-1">{t('ad.title')}</h1>
         <p className="text-sm text-slate-500 mb-6">
-          의료광고 문구를 입력하거나 PDF를 업로드하면 법령 위반 소지를 검토해드립니다.
+          {t('ad.desc')}
         </p>
-
-        {/* 입력 언어 토글 */}
-        <div className="mb-3 flex items-center gap-3">
-          <div className="inline-flex overflow-hidden rounded-lg border border-gray-300">
-            <button
-              type="button"
-              onClick={() => setLang('ko')}
-              disabled={loading}
-              className={`px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 ${
-                lang === 'ko' ? 'bg-navy text-white' : 'bg-white text-slate-500 hover:bg-gray-50'
-              }`}
-            >
-              한국어
-            </button>
-            <button
-              type="button"
-              onClick={() => setLang('en')}
-              disabled={loading}
-              className={`px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50 ${
-                lang === 'en' ? 'bg-navy text-white' : 'bg-white text-slate-500 hover:bg-gray-50'
-              }`}
-            >
-              English
-            </button>
-          </div>
-          <span className="text-xs text-slate-400">
-            영어로 입력하면 한국 법 기준으로 분석해 영어로 답변합니다.
-          </span>
-        </div>
 
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={
-            lang === 'en'
-              ? 'e.g. "100% safe procedure, no side effects at all"'
-              : '예: "100% 안전한 시술, 부작용 전혀 없음"'
-          }
+          placeholder={t('ad.placeholder')}
           rows={4}
           disabled={loading}
           className="w-full rounded-lg border border-gray-300 p-4 text-sm focus:border-aqua focus:outline-none disabled:bg-gray-100"
@@ -157,7 +126,7 @@ export default function AdReview() {
         {/* PDF 업로드 */}
         <div className="mt-3">
           <label className="mb-1 block text-xs font-medium text-slate-500">
-            또는 PDF 파일 업로드 (선택)
+            {t('ad.uploadLabel')}
           </label>
           <div className="flex items-center gap-3">
             <input
@@ -174,13 +143,13 @@ export default function AdReview() {
                 disabled={loading}
                 className="text-xs text-slate-400 hover:text-red-500"
               >
-                제거
+                {t('ad.fileRemove')}
               </button>
             )}
           </div>
           {file && (
             <p className="mt-1 text-xs text-slate-500">
-              선택됨: {file.name} ({(file.size / 1024 / 1024).toFixed(1)}MB)
+              {t('ad.fileSelected')}: {file.name} ({(file.size / 1024 / 1024).toFixed(1)}MB)
             </p>
           )}
         </div>
@@ -190,7 +159,7 @@ export default function AdReview() {
           disabled={loading || (!text.trim() && !file)}
           className="mt-4 rounded-lg bg-navy px-6 py-2.5 text-sm font-medium text-white hover:bg-navy/90 disabled:opacity-50"
         >
-          {loading ? '검토 중…' : '검토 요청'}
+          {loading ? t('ad.submitting') : t('ad.submit')}
         </button>
 
         {error && <p className="mt-4 text-sm text-error">{error}</p>}
@@ -201,13 +170,13 @@ export default function AdReview() {
             {result.summary && (
               <div className="flex gap-2 text-xs">
                 <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700">
-                  확인 필요 {result.summary.todo}
+                  {t('ad.statusTodo')} {result.summary.todo}
                 </span>
                 <span className="rounded-full bg-red-50 px-3 py-1 text-red-700">
-                  위반 소지 {result.summary.risk}
+                  {t('ad.statusRisk')} {result.summary.risk}
                 </span>
                 <span className="rounded-full bg-teal-50 px-3 py-1 text-teal-700">
-                  문제 없음 {result.summary.ok}
+                  {t('ad.statusOk')} {result.summary.ok}
                 </span>
               </div>
             )}
@@ -215,7 +184,7 @@ export default function AdReview() {
             {/* 검토 항목들 */}
             {result.checklist.length === 0 ? (
               <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-slate-500">
-                검토 항목이 없습니다.
+                {t('ad.noItems')}
               </div>
             ) : (
               result.checklist.map((item) => {
@@ -228,7 +197,7 @@ export default function AdReview() {
                         className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
                         style={{ color: s.color, backgroundColor: `${s.color}1A` }}
                       >
-                        ● {s.label}
+                        ● {t(s.labelKey)}
                       </span>
                     </div>
                     {item.reason && (
@@ -236,7 +205,7 @@ export default function AdReview() {
                     )}
                     {item.citations && item.citations.length > 0 && (
                       <div className="mt-3 border-t border-gray-100 pt-3">
-                        <p className="mb-1 text-xs font-medium text-slate-400">근거 법령</p>
+                        <p className="mb-1 text-xs font-medium text-slate-400">{t('ad.evidenceLabel')}</p>
                         <ul className="space-y-1">
                           {item.citations.map((c) => (
                             <li key={c.n} className="text-xs text-slate-600">
@@ -260,7 +229,7 @@ export default function AdReview() {
             {/* 수정 추천 */}
             {result.revision && result.revision !== result.inputText && (
               <div className="rounded-xl border border-aqua bg-cyan-50 p-6">
-                <p className="mb-1 text-xs font-medium text-slate-500">수정 추천 문구</p>
+                <p className="mb-1 text-xs font-medium text-slate-500">{t('ad.revisionLabel')}</p>
                 <p className="text-sm font-medium text-navy">{result.revision}</p>
               </div>
             )}

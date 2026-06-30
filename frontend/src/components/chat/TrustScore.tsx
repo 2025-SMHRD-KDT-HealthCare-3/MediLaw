@@ -1,17 +1,19 @@
 // src/components/chat/TrustScore.tsx
+import { useLang } from '../../i18n/LanguageContext';
 
 interface TrustScoreProps {
   score: number; // 0~100
 }
 
 export default function TrustScore({ score }: TrustScoreProps) {
+  const { t } = useLang();
   // 점수 구간별 색/라벨 (상태 색 토큰 재사용)
   const { color, label } =
     score >= 80
-      ? { color: 'var(--color-confirmed)', label: '높음' }
+      ? { color: 'var(--color-confirmed)', label: t('trust.high') }
       : score >= 60
-      ? { color: 'var(--color-warning)', label: '보통' }
-      : { color: 'var(--color-error)', label: '낮음' };
+      ? { color: 'var(--color-warning)', label: t('trust.medium') }
+      : { color: 'var(--color-error)', label: t('trust.low') };
 
   // 원 둘레 = 2πr, 점수만큼만 채우고 나머지는 비움
   const radius = 16;
@@ -34,7 +36,7 @@ export default function TrustScore({ score }: TrustScoreProps) {
       </svg>
       <div className="flex flex-col leading-tight">
         <span className="text-sm font-bold" style={{ color }}>{score}</span>
-        <span className="text-[10px] text-gray-500">신뢰도 {label}</span>
+        <span className="text-[10px] text-gray-500">{t('trust.label')} {label}</span>
       </div>
     </div>
   );

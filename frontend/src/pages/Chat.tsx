@@ -4,6 +4,7 @@ import ChatMessage from '../components/chat/ChatMessage'
 import { useChatStore } from '../store/chatStore'
 import type { ChatMessage as ChatMessageType, Citation, CitationStatus } from '../types/chat'
 import { createRoom, askAi, getChats } from '../api/chat'
+import { useLang } from '../i18n/LanguageContext'
 
 // 백엔드 검증상태 → 우리 CitationStatus 매핑 (문서 §11)
 const STATUS_MAP: Record<string, CitationStatus> = {
@@ -16,8 +17,8 @@ const ROOM_KEY = 'medilaw_current_room' // localStorage 키
 
 export default function Chat() {
   const { messages, addMessage, setMessages } = useChatStore()
+  const { lang, t } = useLang()
   const [input, setInput] = useState('')
-  const [lang, setLang] = useState<'ko' | 'en'>('ko') // 입력 언어 (기본 한국어)
   const [roomId, setRoomId] = useState<number | string | null>(null)
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
@@ -53,7 +54,7 @@ export default function Chat() {
 
       // 2) 저장된 방 없음 → 새 방 생성
       try {
-        const res = await createRoom('의료법 상담')
+        const res = await createRoom(t('chat.roomTitle'))
         const newId = res.data?.room_id ?? null
         setRoomId(newId)
         if (newId != null) localStorage.setItem(ROOM_KEY, String(newId))
@@ -67,12 +68,13 @@ export default function Chat() {
       }
     }
     init()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigate, setMessages])
 
   const handleSend = async () => {
     if (!input.trim() || loading) return
     if (!roomId) {
-      alert('방이 아직 준비되지 않았어요. 잠시 후 다시 시도해주세요.')
+      alert(t('chat.roomNotReady'))
       return
     }
 
@@ -115,7 +117,7 @@ export default function Chat() {
       const aiMessage: ChatMessageType = {
         id: String(answer?.chat_id ?? Date.now()),
         role: 'assistant',
-        content: answer?.chat_text ?? '(답변 내용 없음)',
+        content: answer?.chat_text ?? t('chat.answerEmpty'),
         timestamp: answer?.chatted_at ?? new Date().toISOString(),
         citations: citations.length > 0 ? citations : undefined,
         trustScore,
@@ -127,7 +129,7 @@ export default function Chat() {
       addMessage({
         id: Date.now().toString(),
         role: 'assistant',
-        content: '답변을 가져오지 못했어요. (' + (err.response?.data?.message ?? err.message) + ')',
+        content: t('chat.answerFailed') + ' (' + (err.response?.data?.message ?? err.message) + ')',
         timestamp: new Date().toISOString(),
       })
     } finally {
@@ -141,7 +143,7 @@ export default function Chat() {
     setMessages([])
     setRoomId(null)
     try {
-      const res = await createRoom('의료법 상담')
+      const res = await createRoom(t('chat.roomTitle'))
       const newId = res.data?.room_id ?? null
       setRoomId(newId)
       if (newId != null) localStorage.setItem(ROOM_KEY, String(newId))
@@ -154,14 +156,14 @@ export default function Chat() {
     <div className="flex flex-col bg-[#F7F8FA]" style={{ height: 'calc(100vh - 60px)' }}>
       <header className="flex items-center justify-between border-b border-gray-200 bg-navy px-6 py-4">
         <div>
-          <h1 className="text-lg font-bold text-white">AI 의료법 질의응답</h1>
-          <p className="text-xs text-aqua">답이 아니라 상태를 관리하는 도구</p>
+          <h1 className="text-lg font-bold text-white">{t('chat.title')}</h1>
+          <p className="text-xs text-aqua">{t('chat.subtitle')}</p>
         </div>
         <button
           onClick={handleNewChat}
           className="rounded-full border border-aqua px-4 py-1.5 text-sm font-medium text-aqua hover:bg-aqua hover:text-navy"
         >
-          + 새 상담
+          {t('chat.newChat')}
         </button>
       </header>
 
@@ -169,58 +171,25 @@ export default function Chat() {
         <div className="mx-auto max-w-3xl space-y-4">
           {messages.length === 0 && !loading && (
             <p className="text-center text-sm text-slate-400 mt-10">
-              의료법 관련 질문을 입력해 상담을 시작하세요.
+              {t('chat.empty')}
             </p>
           )}
           {messages.map((msg) => (
             <ChatMessage key={msg.id} message={msg} />
           ))}
-          {loading && <p className="text-sm text-slate-400">답변 생성 중…</p>}
+          {loading && <p className="text-sm text-slate-400">{t('chat.generating')}</p>}
         </div>
       </main>
 
       <footer className="border-t border-gray-200 bg-white px-6 py-4">
         <div className="mx-auto max-w-3xl">
-          {/* 입력 언어 토글 */}
-          <div className="mb-2 flex items-center gap-3">
-            <div className="inline-flex overflow-hidden rounded-lg border border-gray-300">
-              <button
-                type="button"
-                onClick={() => setLang('ko')}
-                disabled={loading}
-                className={`px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
-                  lang === 'ko' ? 'bg-navy text-white' : 'bg-white text-slate-500 hover:bg-gray-50'
-                }`}
-              >
-                한국어
-              </button>
-              <button
-                type="button"
-                onClick={() => setLang('en')}
-                disabled={loading}
-                className={`px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
-                  lang === 'en' ? 'bg-navy text-white' : 'bg-white text-slate-500 hover:bg-gray-50'
-                }`}
-              >
-                English
-              </button>
-            </div>
-            <span className="text-xs text-slate-400">
-              영어로 입력하면 한국 법 기준으로 분석해 영어로 답변합니다.
-            </span>
-          </div>
-
           <div className="flex items-center gap-2">
             <input
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-              placeholder={
-                lang === 'en'
-                  ? 'Ask a question about Korean medical law…'
-                  : '의료법 관련 질문을 입력하세요…'
-              }
+              placeholder={t('chat.placeholder')}
               disabled={loading}
               className="flex-1 rounded-full border border-gray-300 px-4 py-2.5 text-sm focus:border-aqua focus:outline-none disabled:bg-gray-100"
             />
@@ -229,7 +198,7 @@ export default function Chat() {
               disabled={loading}
               className="rounded-full bg-navy px-5 py-2.5 text-sm font-medium text-white hover:bg-navy/90 disabled:opacity-50"
             >
-              전송
+              {t('chat.send')}
             </button>
           </div>
         </div>

@@ -2,12 +2,14 @@
 import type { ChatMessage as ChatMessageType } from '../../types/chat';
 import CitationBadge from './CitationBadge';
 import TrustScore from './TrustScore';
+import { useLang } from '../../i18n/LanguageContext';
 
 interface ChatMessageProps {
   message: ChatMessageType;
 }
 
 export default function ChatMessage({ message }: ChatMessageProps) {
+  const { t } = useLang();
   const isUser = message.role === 'user';
 
   // 1) 사용자 질문 → 오른쪽, navy 말풍선
@@ -40,7 +42,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
         {/* 근거 법령 — citations가 있을 때만 */}
         {message.citations && message.citations.length > 0 && (
           <div className="space-y-2">
-            <p className="px-1 text-xs font-semibold text-gray-500">근거 법령</p>
+            <p className="px-1 text-xs font-semibold text-gray-500">{t('chat.evidenceLabel')}</p>
             {message.citations.map((c) => (
               <div key={c.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
                 <div className="mb-1 flex items-center justify-between gap-2">
