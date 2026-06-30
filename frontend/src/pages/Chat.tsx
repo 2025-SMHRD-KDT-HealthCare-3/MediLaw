@@ -209,15 +209,16 @@ export default function Chat() {
           sidebarOpen ? 'w-64' : 'w-0 overflow-hidden border-r-0'
         }`}
       >
-        <div className="p-3">
+        <div className="p-2">
           <button
             onClick={handleNewChat}
-            className="w-full rounded-lg bg-navy px-4 py-2 text-sm font-medium text-white hover:bg-navy/90"
+            className="flex w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-navy shadow-sm transition hover:bg-slate-50"
           >
-            {t('chat.newChat')}
+            <span className="text-base leading-none text-aqua">＋</span>
+            <span>{t('chat.newChat')}</span>
           </button>
         </div>
-        <div className="px-4 pb-1 text-xs font-medium text-slate-400">{t('chat.roomListTitle')}</div>
+        <div className="px-3 pb-1 pt-1 text-[11px] font-semibold tracking-wide text-slate-400">{t('chat.roomListTitle')}</div>
         <div className="flex-1 overflow-y-auto px-2 pb-3">
           {rooms.length === 0 && (
             <p className="px-2 py-4 text-xs text-slate-400">{t('chat.noRooms')}</p>
