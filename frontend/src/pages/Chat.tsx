@@ -5,6 +5,8 @@ import { useChatStore } from '../store/chatStore'
 import type { ChatMessage as ChatMessageType, Citation, CitationStatus } from '../types/chat'
 import { createRoom, askAi, getChats } from '../api/chat'
 import { useLang } from '../i18n/LanguageContext'
+import LoadingWait from '../components/LoadingWait'
+import { friendlyError } from '../utils/apiError'
 
 // 백엔드 검증상태 → 우리 CitationStatus 매핑 (문서 §11)
 const STATUS_MAP: Record<string, CitationStatus> = {
@@ -129,7 +131,7 @@ export default function Chat() {
       addMessage({
         id: Date.now().toString(),
         role: 'assistant',
-        content: t('chat.answerFailed') + ' (' + (err.response?.data?.message ?? err.message) + ')',
+        content: friendlyError(err, t, 'chat.answerFailed'),
         timestamp: new Date().toISOString(),
       })
     } finally {
@@ -177,7 +179,7 @@ export default function Chat() {
           {messages.map((msg) => (
             <ChatMessage key={msg.id} message={msg} />
           ))}
-          {loading && <p className="text-sm text-slate-400">{t('chat.generating')}</p>}
+          {loading && <LoadingWait compact title={t('chat.generating')} hint={t('chat.waitHint')} />}
         </div>
       </main>
 

@@ -4,6 +4,8 @@ import { reviewAdCopy, createRoom } from '../api/chat'
 import { createRoomSummary } from '../api/checklistApi'
 import { useLang } from '../i18n/LanguageContext'
 import AdReviewGraph from '../components/AdReviewGraph'
+import LoadingWait from '../components/LoadingWait'
+import { friendlyError } from '../utils/apiError'
 
 interface Citation {
   n: number
@@ -108,7 +110,7 @@ export default function AdReview() {
       })
     } catch (err: any) {
       console.error('광고검토 에러:', err)
-      setError(err.response?.data?.message ?? err.message ?? t('ad.reviewFailed'))
+      setError(friendlyError(err, t, 'ad.reviewFailed'))
     } finally {
       setLoading(false)
     }
@@ -146,7 +148,7 @@ export default function AdReview() {
       navigate(`/checklist?roomId=${roomId}`)
     } catch (err: any) {
       console.error('체크리스트 생성 실패:', err)
-      setError(err.response?.data?.message ?? err.message ?? t('ad.checklistFailed'))
+      setError(friendlyError(err, t, 'ad.checklistFailed'))
     } finally {
       setGenLoading(false)
     }
@@ -222,6 +224,27 @@ export default function AdReview() {
         </button>
 
         {error && <p className="mt-4 text-sm text-error">{error}</p>}
+
+        {/* 검토 진행 중 — 다운로드 페이지처럼 대기 표시(무작정 멈춘 게 아님을 안내) */}
+        {loading && (
+          <LoadingWait
+            title={t('ad.reviewingTitle')}
+            hint={t('ad.reviewingHint')}
+            expected={t('ad.reviewExpected')}
+            steps={[t('ad.reviewStep1'), t('ad.reviewStep2'), t('ad.reviewStep3')]}
+          />
+        )}
+
+        {/* 체크리스트 생성 중 — 저장이 끝나면 체크리스트 페이지로 전환됨 */}
+        {genLoading && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/85 px-6">
+            <LoadingWait
+              title={t('ad.genChecklistLoading')}
+              hint={t('ad.genChecklistHint')}
+              steps={[t('ad.genStep1'), t('ad.genStep2')]}
+            />
+          </div>
+        )}
 
         {result && (
           <div className="mt-6 space-y-4">
