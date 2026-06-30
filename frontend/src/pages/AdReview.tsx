@@ -98,6 +98,25 @@ function calcAdStatus(legalBasisStr?: string): string {
   }
 }
 
+// 전체 비교에서 문제 문구(빨강)·수정 문구(초록)를 본문 글자에 인라인 하이라이트한다.
+function highlightText(text: string, phrases: (string | undefined)[], cls: string) {
+  const valid = [...new Set(phrases.filter((p): p is string => !!p && p.trim().length > 1).map((p) => p.trim()))].sort(
+    (a, b) => b.length - a.length,
+  )
+  if (valid.length === 0 || !text) return text
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const re = new RegExp(`(${valid.map(esc).join('|')})`, 'g')
+  return text.split(re).map((part, i) =>
+    i % 2 === 1 ? (
+      <mark key={i} className={cls}>
+        {part}
+      </mark>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  )
+}
+
 export default function AdReview() {
   const { lang, t } = useLang()
   const navigate = useNavigate()
@@ -392,11 +411,15 @@ export default function AdReview() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="max-h-72 overflow-auto rounded-lg border border-red-100 bg-red-50/60 p-3">
                     <p className="mb-1 text-xs font-medium text-red-600">{t('ad.beforeLabel')}</p>
-                    <p className="whitespace-pre-wrap text-sm text-slate-700">{result.inputText}</p>
+                    <p className="whitespace-pre-wrap text-sm text-slate-700">
+                      {highlightText(result.inputText, result.checklist.map((c) => c.title), 'rounded bg-red-200 px-0.5 text-red-900')}
+                    </p>
                   </div>
                   <div className="max-h-72 overflow-auto rounded-lg border border-teal-100 bg-teal-50/60 p-3">
                     <p className="mb-1 text-xs font-medium text-teal-700">{t('ad.afterLabel')}</p>
-                    <p className="whitespace-pre-wrap text-sm text-slate-700">{result.revision}</p>
+                    <p className="whitespace-pre-wrap text-sm text-slate-700">
+                      {highlightText(result.revision ?? '', result.checklist.map((c) => c.suggestion), 'rounded bg-teal-200 px-0.5 text-teal-900')}
+                    </p>
                   </div>
                 </div>
               </div>

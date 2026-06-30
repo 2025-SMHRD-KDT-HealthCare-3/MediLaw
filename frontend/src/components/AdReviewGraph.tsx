@@ -2,7 +2,8 @@ import { useMemo } from 'react'
 
 // 광고검토 결과 '관계도(마인드맵)'.
 // 중앙 = 입력한 광고 문구(라벨 + 짧은 스니펫) → 가지 = 위반 쟁점(문구 + 위험등급)
-// → 잎 = 각 쟁점의 근거 법령·판례. (제재/처분은 엔진이 안 주므로 근거로 대체)
+// → 잎 = 각 쟁점의 근거 법령·판례.
+// 잎은 가지 근처에 '세로로 쌓아' 이웃 가지의 잎과 겹치지 않게 한다(박스 겹침/글자 가림 방지).
 
 interface Citation {
   n: number
@@ -24,7 +25,6 @@ const STATUS_COLOR: Record<string, string> = {
   na: '#6B7280',
 }
 const CENTER_COLOR = '#374151'
-const MAX_LEAVES = 3
 const PAD = 18
 
 function spreadX(k: number, pad = PAD): number[] {
@@ -32,13 +32,6 @@ function spreadX(k: number, pad = PAD): number[] {
   if (k === 1) return [50]
   const span = 100 - 2 * pad
   return Array.from({ length: k }, (_, i) => pad + (span * i) / (k - 1))
-}
-
-function leafX(cx: number, m: number): number[] {
-  if (m <= 0) return []
-  if (m === 1) return [cx]
-  const gap = 13
-  return Array.from({ length: m }, (_, i) => Math.max(8, Math.min(92, cx + (i - (m - 1) / 2) * gap)))
 }
 
 // reason 끝의 "(근거: …)" 에서 법령·판례명을 뽑는다(괄호/대괄호 안 콤마는 보호).
@@ -63,9 +56,9 @@ function parseBasis(reason?: string): string[] {
   const cleaned = parts
     .map((p) =>
       p
-        .replace(/^\s*\[[^\]]*\]\s*/, '') // [가이드라인] 접두 제거
-        .replace(/^\s*\([^()]*\)\s*/, '') // (별첨) 접두 제거
-        .replace(/\s*\([^()]*\)\s*$/, '') // 조문 설명 괄호 제거
+        .replace(/^\s*\[[^\]]*\]\s*/, '')
+        .replace(/^\s*\([^()]*\)\s*/, '')
+        .replace(/\s*\([^()]*\)\s*$/, '')
         .replace(/\.pdf$/i, '')
         .trim(),
     )
@@ -110,9 +103,12 @@ export default function AdReviewGraph({
   const { nodes, edges } = useMemo(() => {
     const nodes: PNode[] = []
     const edges: PEdge[] = []
-    const Y = { topLeaf: 9, topFind: 29, center: 50, botFind: 71, botLeaf: 91 }
+    // 위쪽 가지의 잎은 가지 위로(작은 y), 아래쪽 가지의 잎은 가지 아래로(큰 y) 세로로 쌓는다.
+    const Y = { center: 50, topFind: 31, topLeaf: [17, 4], botFind: 69, botLeaf: [83, 96] }
 
-    const snippet = inputSnippet ? `"${inputSnippet.slice(0, 22).trim()}${inputSnippet.length > 22 ? '…' : ''}"` : undefined
+    const snippet = inputSnippet
+      ? `"${inputSnippet.slice(0, 22).trim()}${inputSnippet.length > 22 ? '…' : ''}"`
+      : undefined
     nodes.push({ key: 'center', kind: 'center', x: 50, y: Y.center, color: CENTER_COLOR, label: centerLabel, sub: snippet, title: inputSnippet || undefined })
 
     if (items.length === 0) {
@@ -128,7 +124,7 @@ export default function AdReviewGraph({
     const topXs = spreadX(top.length)
     const botXs = spreadX(bottom.length)
 
-    const place = (item: GraphItem, x: number, findY: number, leafY: number) => {
+    const place = (item: GraphItem, x: number, findY: number, leafYs: number[]) => {
       const color = STATUS_COLOR[item.status ?? 'na'] ?? STATUS_COLOR.na
       const fkey = `f-${item.id}`
       nodes.push({
@@ -143,15 +139,17 @@ export default function AdReviewGraph({
       })
       edges.push({ key: `e-${fkey}`, x1: 50, y1: Y.center, x2: x, y2: findY, color, opacity: 0.5 })
 
-      // 잎 = 근거: 구조화된 citations 우선, 없으면 reason의 "(근거: …)" 파싱
+      // 잎 = 근거: citations 우선, 없으면 reason의 "(근거: …)" 파싱. 최대 2개를 세로로 쌓음.
       const fromCit = (item.citations ?? []).map((c) => ({ label: c.label, href: c.source_url }))
       const basis = fromCit.length > 0 ? fromCit : parseBasis(item.reason).map((label) => ({ label, href: undefined as string | undefined }))
-      const leaves = basis.slice(0, MAX_LEAVES)
-      const lxs = leafX(x, leaves.length)
+      const leaves = basis.slice(0, leafYs.length)
       leaves.forEach((lf, i) => {
+        // 살짝 좌우로 벌리고(겹침 방지 + 가지 느낌) 세로로 분리
+        const lx = Math.max(10, Math.min(90, x + (i - (leaves.length - 1) / 2) * 12))
+        const ly = leafYs[i]
         const lkey = `${fkey}-b${i}`
-        nodes.push({ key: lkey, kind: 'leaf', x: lxs[i], y: leafY, color, label: lf.label || '근거', title: lf.label, href: lf.href || undefined })
-        edges.push({ key: `e-${lkey}`, x1: x, y1: findY, x2: lxs[i], y2: leafY, color, opacity: 0.3 })
+        nodes.push({ key: lkey, kind: 'leaf', x: lx, y: ly, color, label: lf.label || '근거', title: lf.label, href: lf.href || undefined })
+        edges.push({ key: `e-${lkey}`, x1: x, y1: findY, x2: lx, y2: ly, color, opacity: 0.3 })
       })
     }
 
@@ -161,20 +159,10 @@ export default function AdReviewGraph({
   }, [items, inputSnippet, centerLabel, emptyLabel, statusLabels])
 
   return (
-    <div className="relative w-full overflow-hidden rounded-xl border border-gray-200 bg-white" style={{ height: 560 }}>
+    <div className="relative w-full overflow-hidden rounded-xl border border-gray-200 bg-white" style={{ height: 600 }}>
       <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
         {edges.map((e) => (
-          <line
-            key={e.key}
-            x1={e.x1}
-            y1={e.y1}
-            x2={e.x2}
-            y2={e.y2}
-            stroke={e.color}
-            strokeOpacity={e.opacity}
-            strokeWidth={1.5}
-            vectorEffect="non-scaling-stroke"
-          />
+          <line key={e.key} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke={e.color} strokeOpacity={e.opacity} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
         ))}
       </svg>
 
@@ -193,14 +181,14 @@ export default function AdReviewGraph({
 
         if (nd.kind === 'finding') {
           return (
-            <div key={nd.key} className={`${base} max-w-[160px] rounded-lg px-3 py-2`} style={{ ...pos, backgroundColor: nd.color }} title={nd.title}>
+            <div key={nd.key} className={`${base} max-w-[170px] rounded-lg px-3 py-2`} style={{ ...pos, backgroundColor: nd.color }} title={nd.title}>
               <span className="line-clamp-2 block text-xs font-semibold leading-snug text-white">{nd.label}</span>
               {nd.sub && <span className="mt-0.5 block text-[10px] font-medium text-white/85">{nd.sub}</span>}
             </div>
           )
         }
 
-        const leafCls = `${base} max-w-[120px] rounded-md px-2.5 py-1`
+        const leafCls = `${base} max-w-[150px] rounded-md px-2.5 py-1`
         const inner = <span className="block truncate text-[11px] font-medium text-white">{nd.label}</span>
         return nd.href ? (
           <a key={nd.key} href={nd.href} target="_blank" rel="noreferrer" className={`${leafCls} hover:brightness-110`} style={{ ...pos, backgroundColor: nd.color, opacity: 0.92 }} title={nd.title}>
