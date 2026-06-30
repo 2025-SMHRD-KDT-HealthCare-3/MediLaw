@@ -40,27 +40,34 @@ def _generate_checklist(db: Session, room_id: int) -> dict:
 
 
 def create_summary(db: Session, room_id: int, current_user: User, data: SummaryCreate):
-    """Generate and store a room checklist using HMS chat history."""
+    """Store a room checklist.
+
+    체크리스트(checklist_item)를 클라이언트가 직접 주면(예: 광고검토 결과) HMS 재생성 없이
+    그대로 저장한다. 안 주면 기존처럼 방 대화이력으로 HMS가 새로 생성해 저장한다.
+    """
     ensure_room_access(db, room_id, current_user)
     existing = summary_repository.get_unconfirmed_for_room(db, room_id)
     if existing is not None:
         return existing
-    generated = _generate_checklist(db, room_id)
-    payload = data.model_copy(
-        update={
-            "summary": data.summary
-            or json.dumps(
-                {
-                    "checklist_summary": generated.get("checklist_summary"),
-                    "search_queries": generated.get("search_queries"),
-                    "citation_check": generated.get("citation_check"),
-                },
-                ensure_ascii=False,
-            ),
-            "checklist_item": data.checklist_item
-            or json.dumps(generated.get("checklist", []), ensure_ascii=False),
-        }
-    )
+    if data.checklist_item:
+        # 클라이언트가 만든 체크리스트를 그대로 저장(HMS 호출 없음).
+        payload = data
+    else:
+        generated = _generate_checklist(db, room_id)
+        payload = data.model_copy(
+            update={
+                "summary": data.summary
+                or json.dumps(
+                    {
+                        "checklist_summary": generated.get("checklist_summary"),
+                        "search_queries": generated.get("search_queries"),
+                        "citation_check": generated.get("citation_check"),
+                    },
+                    ensure_ascii=False,
+                ),
+                "checklist_item": json.dumps(generated.get("checklist", []), ensure_ascii=False),
+            }
+        )
     try:
         summary = summary_repository.create(db, room_id, current_user.user_id, payload)
         db.commit()
