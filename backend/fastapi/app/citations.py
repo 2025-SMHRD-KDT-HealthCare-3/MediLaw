@@ -179,6 +179,8 @@ def _apply_content_check(result: VerifyResult, claim: str | None, content: str |
     """
     if not config.CONTENT_CHECK:
         return result
+    if result.type != "statute":
+        return result  # 내용 일치 검증은 법령(조문)에만 — 판례 등은 본문 길이차로 보정 불가
     if not claim or not content:
         return result  # claim 모름/본문 없음 → 미검증(None 유지)
     # 실질적 '주장'에만 작동: 인용 토큰(법령·판례)을 제거한 뒤 남는 의미 텍스트가 짧으면
@@ -412,9 +414,10 @@ def verify_case(case_no: str, raw: str, as_of: str | None,
         matched_label=label,
         matched_source_url=row["source_url"] or "", note=note,
     )
-    # 내용 일치 검증(플래그 ON & claim·본문 있을 때만). 판례 요지(summary)·없으면 본문(body)을 비교 대상으로.
-    case_content = row["summary"] or row["body"]
-    return _apply_content_check(result, claim, case_content)
+    # 내용 일치 검증은 판례에 적용하지 않는다. 임계값이 짧은 법령 조문 기준으로 보정돼 있어,
+    # 긴 판결문(요지·본문)과 짧은 사유 문장의 유사도가 구조적으로 낮게 나와 정상 인용을
+    # 과하게 '주의' 처리하기 때문. 판례는 구조 검증(실재·시점)만 수행한다.
+    return result
 
 
 # 문장 경계: 마침표·물음표·느낌표·줄바꿈 등. 인용을 포함하는 '주장 문장'을 잘라낼 때 사용.
