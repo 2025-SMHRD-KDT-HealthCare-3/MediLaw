@@ -129,13 +129,26 @@ export default function AdReview() {
             {t('ad.uploadLabel')}
           </label>
           <div className="flex items-center gap-3">
-            <input
-              type="file"
-              accept="application/pdf,.pdf"
-              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-              disabled={loading}
-              className="text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-navy file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-navy/90 disabled:opacity-50"
-            />
+            {/* 네이티브 <input type="file">는 '파일 선택 / 선택된 파일 없음'을 브라우저 OS
+                언어로 그려서 영어 모드에서도 한글이 보인다. 그래서 input은 숨기고(sr-only)
+                라벨 버튼과 파일명 표시를 직접 그려 t()로 번역되게 한다. */}
+            <label
+              className={`shrink-0 rounded-lg bg-navy px-4 py-2 text-sm font-medium text-white hover:bg-navy/90 ${
+                loading ? 'pointer-events-none opacity-50' : 'cursor-pointer'
+              }`}
+            >
+              {t('ad.fileChoose')}
+              <input
+                type="file"
+                accept="application/pdf,.pdf"
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                disabled={loading}
+                className="sr-only"
+              />
+            </label>
+            <span className="min-w-0 truncate text-sm text-slate-600">
+              {file ? file.name : t('ad.fileNone')}
+            </span>
             {file && (
               <button
                 type="button"
