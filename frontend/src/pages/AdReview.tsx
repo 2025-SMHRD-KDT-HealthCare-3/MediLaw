@@ -109,6 +109,7 @@ export default function AdReview() {
   const [genLoading, setGenLoading] = useState(false)
   const [view, setView] = useState<'list' | 'graph'>('list')
   const [history, setHistory] = useState<AdHistoryItem[]>([])
+  const [sidebarOpen, setSidebarOpen] = useState(true) // 사이드바 접기/펼치기
 
   // 왼쪽 사이드바: 광고검토 이력(과거 대시보드의 '광고문구 검토 이력')
   const loadHistory = async () => {
@@ -234,7 +235,11 @@ export default function AdReview() {
   return (
     <div className="flex min-h-screen bg-[#F7F8FA]">
       {/* 왼쪽: 광고검토 이력 사이드바 (실제 챗봇식 — 과거 검토 들어가기 / 새 검토) */}
-      <aside className="flex w-64 shrink-0 flex-col border-r border-gray-200 bg-white">
+      <aside
+        className={`flex shrink-0 flex-col border-r border-slate-200 bg-[#EEF2F7] transition-all duration-200 ${
+          sidebarOpen ? 'w-64' : 'w-0 overflow-hidden border-r-0'
+        }`}
+      >
         <div className="p-3">
           <button
             onClick={handleNewReview}
@@ -254,7 +259,7 @@ export default function AdReview() {
               <div
                 key={h.ai_copy_id}
                 onClick={() => handleSelectReview(h.ai_copy_id)}
-                className="group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 hover:bg-gray-50"
+                className="group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 transition hover:bg-white/60"
               >
                 <div className="min-w-0">
                   <p className="truncate text-sm text-slate-700">{h.input_text || t('ad.untitledReview')}</p>
@@ -279,6 +284,14 @@ export default function AdReview() {
       {/* 오른쪽: 검토 입력/결과 */}
       <div className="flex-1 overflow-y-auto p-8">
         <div className="mx-auto max-w-2xl">
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            title={t('common.toggleSidebar')}
+            aria-label={t('common.toggleSidebar')}
+            className="mb-3 text-lg leading-none text-slate-400 hover:text-navy"
+          >
+            ☰
+          </button>
           <h1 className="text-2xl font-bold text-navy mb-1">{t('ad.title')}</h1>
         <p className="text-sm text-slate-500 mb-6">
           {t('ad.desc')}

@@ -20,6 +20,7 @@ export const strings: Record<Lang, Record<string, string>> = {
 
     // 공통
     'common.loading': '불러오는 중…',
+    'common.toggleSidebar': '사이드바 접기/펼치기',
     'error.timeout': '요청이 평소보다 오래 걸려 시간이 초과됐어요. 잠시 후 다시 시도해 주세요.',
     'error.unavailable': '서버에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.',
 
@@ -113,7 +114,7 @@ export const strings: Record<Lang, Record<string, string>> = {
     'checklist.generating': '체크리스트 생성 중…',
     'checklist.generatingSub': '대화를 분석하고 있어요. 수십 초 걸릴 수 있어요.',
     'checklist.loadingSaved': '저장된 체크리스트를 불러오는 중…',
-    'checklist.empty': '아직 생성된 체크리스트가 없어요. 아래 버튼을 누르면 생성되고 저장됩니다.',
+    'checklist.empty': '아직 저장된 체크리스트가 없어요. 광고검토에서 검토 후 “체크리스트 생성”을 누르면 여기에 표시됩니다.',
     'checklist.generate': '체크리스트 생성',
     'checklist.noRoom': '분석할 상담 내역이 없어요. 먼저 챗봇에서 상담을 진행해주세요.',
     'checklist.emptyHistory': '대화 내역이 비어 있어요. 챗봇에서 질문을 먼저 해주세요.',
@@ -264,6 +265,7 @@ export const strings: Record<Lang, Record<string, string>> = {
 
     // Common
     'common.loading': 'Loading…',
+    'common.toggleSidebar': 'Toggle sidebar',
     'error.timeout': 'This is taking longer than usual and timed out. Please try again in a moment.',
     'error.unavailable': 'Cannot reach the server right now. Please try again shortly.',
 
@@ -352,7 +354,7 @@ export const strings: Record<Lang, Record<string, string>> = {
     'checklist.generating': 'Generating checklist…',
     'checklist.generatingSub': 'Analyzing the conversation. This may take a while.',
     'checklist.loadingSaved': 'Loading saved checklist…',
-    'checklist.empty': 'No checklist yet. Tap the button below to generate and save one.',
+    'checklist.empty': 'No saved checklist yet. Run an ad review and tap “Generate checklist” there — it will show up here.',
     'checklist.generate': 'Generate checklist',
     'checklist.noRoom': 'No consultation to analyze yet. Please start a chat first.',
     'checklist.emptyHistory': 'The conversation is empty. Please ask a question in the chat first.',
