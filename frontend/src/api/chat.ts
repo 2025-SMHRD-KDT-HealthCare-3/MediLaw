@@ -35,6 +35,12 @@ export async function getAdReviews() {
   return res.data;
 }
 
+// 광고문구 검토 단건 조회(이력에서 과거 검토 불러오기)
+export async function getAdCopy(aiCopyId: number | string) {
+  const res = await api.get(`/ai-ad-copies/${aiCopyId}`);
+  return res.data;
+}
+
 // 광고문구 검토 요청 (텍스트 + PDF 파일 지원, 언어 선택)
 export async function reviewAdCopy(
   text: string,

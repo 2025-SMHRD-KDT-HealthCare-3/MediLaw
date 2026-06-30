@@ -95,6 +95,12 @@ export const strings: Record<Lang, Record<string, string>> = {
     'ad.genChecklistHint': '검토 결과를 저장하고 체크리스트로 정리하고 있어요.',
     'ad.genStep1': '검토 결과 정리',
     'ad.genStep2': '저장 후 체크리스트로 이동',
+    'ad.newReview': '새 검토',
+    'ad.historyTitle': '검토 이력',
+    'ad.noHistory': '검토 이력이 없어요',
+    'ad.untitledReview': '제목 없음',
+    'ad.deleteReview': '이력 삭제',
+    'ad.confirmDeleteReview': '이 검토 이력을 삭제할까요?',
 
     // 체크리스트 (Checklist.tsx)
     'checklist.title': '법령 준수 체크리스트',
@@ -328,6 +334,12 @@ export const strings: Record<Lang, Record<string, string>> = {
     'ad.genChecklistHint': 'Saving the review and organizing it into a checklist.',
     'ad.genStep1': 'Organizing the review',
     'ad.genStep2': 'Saving and opening the checklist',
+    'ad.newReview': 'New review',
+    'ad.historyTitle': 'Review history',
+    'ad.noHistory': 'No review history yet',
+    'ad.untitledReview': 'Untitled',
+    'ad.deleteReview': 'Delete from history',
+    'ad.confirmDeleteReview': 'Delete this review from history?',
 
     // Checklist (Checklist.tsx)
     'checklist.title': 'Legal Compliance Checklist',

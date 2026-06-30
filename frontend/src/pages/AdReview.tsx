@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { reviewAdCopy, createRoom } from '../api/chat'
+import { reviewAdCopy, createRoom, getAdReviews, getAdCopy, deleteAdCopy } from '../api/chat'
 import { createRoomSummary } from '../api/checklistApi'
 import { useLang } from '../i18n/LanguageContext'
 import AdReviewGraph from '../components/AdReviewGraph'
@@ -42,6 +42,62 @@ const RISK_MAP: Record<string, string> = { high: 'risk', medium: 'todo', low: 'o
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10MB (백엔드 제한)
 
+interface AdHistoryItem {
+  ai_copy_id: number
+  input_text?: string
+  created_at?: string
+  status: string // risk | todo | ok
+}
+
+// 광고검토 응답(또는 이력 단건)을 화면용 ParsedResult로 변환 (검토/이력 양쪽에서 재사용)
+function parseAdCopy(data: any, fallbackText = ''): ParsedResult {
+  let legal: any = {}
+  try {
+    legal = typeof data.legal_basis === 'string' ? JSON.parse(data.legal_basis) : (data.legal_basis ?? {})
+  } catch {
+    legal = {}
+  }
+  const findings: any[] = Array.isArray(legal.findings)
+    ? legal.findings
+    : Array.isArray(data.findings)
+      ? data.findings
+      : []
+  const checklist: ChecklistItem[] = findings.map((f, i) => ({
+    id: String(f.segment_index ?? i),
+    title: f.segment_text,
+    reason: f.issue,
+    status: RISK_MAP[f.risk_level] ?? 'na',
+    suggestion: f.suggestion,
+    citations: f.citations ?? [],
+  }))
+  const summary = {
+    total: checklist.length,
+    risk: checklist.filter((c) => c.status === 'risk').length,
+    todo: checklist.filter((c) => c.status === 'todo').length,
+    ok: checklist.filter((c) => c.status === 'ok').length,
+    na: checklist.filter((c) => c.status === 'na').length,
+  }
+  return {
+    inputText: data.input_text ?? fallbackText,
+    revision: data.revision_recomm ?? data.alternative_text,
+    checklist,
+    summary,
+  }
+}
+
+// 이력 카드 상태 계산 (legal_basis 문자열 → risk/todo/ok)
+function calcAdStatus(legalBasisStr?: string): string {
+  try {
+    const legal = JSON.parse(legalBasisStr ?? '{}')
+    const findings = Array.isArray(legal.findings) ? legal.findings : []
+    if (findings.some((f: any) => f.risk_level === 'high')) return 'risk'
+    if (findings.some((f: any) => f.risk_level === 'medium')) return 'todo'
+    return 'ok'
+  } catch {
+    return 'ok'
+  }
+}
+
 export default function AdReview() {
   const { lang, t } = useLang()
   const navigate = useNavigate()
@@ -52,6 +108,63 @@ export default function AdReview() {
   const [error, setError] = useState('')
   const [genLoading, setGenLoading] = useState(false)
   const [view, setView] = useState<'list' | 'graph'>('list')
+  const [history, setHistory] = useState<AdHistoryItem[]>([])
+
+  // 왼쪽 사이드바: 광고검토 이력(과거 대시보드의 '광고문구 검토 이력')
+  const loadHistory = async () => {
+    try {
+      const res = await getAdReviews()
+      const list: AdHistoryItem[] = (res.data ?? []).map((a: any) => ({
+        ai_copy_id: a.ai_copy_id,
+        input_text: a.input_text,
+        created_at: a.created_at,
+        status: calcAdStatus(a.legal_basis),
+      }))
+      setHistory(list)
+    } catch (e) {
+      console.error('광고검토 이력 로드 실패:', e)
+    }
+  }
+
+  useEffect(() => {
+    loadHistory()
+  }, [])
+
+  // 새 검토: 입력/결과 비우기
+  const handleNewReview = () => {
+    setResult(null)
+    setText('')
+    setFile(null)
+    setError('')
+    setView('list')
+  }
+
+  // 이력 클릭: 과거 검토 불러오기(빠른 GET이라 별도 대기화면 없음)
+  const handleSelectReview = async (id: number) => {
+    try {
+      setError('')
+      const res = await getAdCopy(id)
+      const data = res.data ?? res
+      setResult(parseAdCopy(data))
+      setText('')
+      setFile(null)
+      setView('list')
+    } catch (err: any) {
+      console.error('이력 불러오기 실패:', err)
+      setError(friendlyError(err, t, 'ad.reviewFailed'))
+    }
+  }
+
+  const handleDeleteReview = async (e: React.MouseEvent, id: number) => {
+    e.stopPropagation()
+    if (!window.confirm(t('ad.confirmDeleteReview'))) return
+    try {
+      await deleteAdCopy(id)
+      setHistory((prev) => prev.filter((h) => h.ai_copy_id !== id))
+    } catch (err) {
+      console.error('이력 삭제 실패:', err)
+    }
+  }
 
   const handleReview = async () => {
     // 텍스트 또는 파일 중 하나는 있어야 함
@@ -68,46 +181,10 @@ export default function AdReview() {
     setLoading(true)
     try {
       const res = await reviewAdCopy(text, file, lang)
-      // 응답 데이터 위치 보정: 검토 결과는 ai_copy 안에 담겨 옴 (없으면 root 그대로)
+      // 검토 결과는 ai_copy 안에 담겨 옴 (없으면 root 그대로)
       const root = res.data ?? res
-      const data = root.ai_copy ?? root
-
-      // legal_basis는 문자열로 옴 → 한 번 더 파싱
-      let legal: any = {}
-      try {
-        legal = typeof data.legal_basis === 'string'
-          ? JSON.parse(data.legal_basis)
-          : (data.legal_basis ?? {})
-      } catch {
-        legal = {}
-      }
-
-      // 위험 항목은 legal.findings에 들어옴 (checklist/checklist_summary는 광고검토에서 비어 있음)
-      const findings: any[] = Array.isArray(legal.findings) ? legal.findings : []
-
-      const checklist: ChecklistItem[] = findings.map((f, i) => ({
-        id: String(f.segment_index ?? i),
-        title: f.segment_text,                  // 위험 문구 원문(수정 전)
-        reason: f.issue,                        // 위험 사유 (근거 법령은 문장 끝 "(근거: …)")
-        status: RISK_MAP[f.risk_level] ?? 'na', // high→위반소지 / medium→확인필요 / low→문제없음
-        suggestion: f.suggestion,               // 대안 문구(수정 후) — 엔진이 세그먼트별로 제공
-        citations: f.citations ?? [],           // 비어 올 수 있음
-      }))
-
-      const summary = {
-        total: checklist.length,
-        risk: checklist.filter((c) => c.status === 'risk').length,
-        todo: checklist.filter((c) => c.status === 'todo').length,
-        ok: checklist.filter((c) => c.status === 'ok').length,
-        na: checklist.filter((c) => c.status === 'na').length,
-      }
-
-      setResult({
-        inputText: data.input_text ?? text,
-        revision: data.revision_recomm ?? data.alternative_text,
-        checklist,
-        summary,
-      })
+      setResult(parseAdCopy(root.ai_copy ?? root, text))
+      loadHistory() // 방금 검토를 왼쪽 이력 목록에 반영
     } catch (err: any) {
       console.error('광고검토 에러:', err)
       setError(friendlyError(err, t, 'ad.reviewFailed'))
@@ -155,9 +232,54 @@ export default function AdReview() {
   }
 
   return (
-    <div className="min-h-screen bg-[#F7F8FA] p-8">
-      <div className="mx-auto max-w-2xl">
-        <h1 className="text-2xl font-bold text-navy mb-1">{t('ad.title')}</h1>
+    <div className="flex min-h-screen bg-[#F7F8FA]">
+      {/* 왼쪽: 광고검토 이력 사이드바 (실제 챗봇식 — 과거 검토 들어가기 / 새 검토) */}
+      <aside className="flex w-64 shrink-0 flex-col border-r border-gray-200 bg-white">
+        <div className="p-3">
+          <button
+            onClick={handleNewReview}
+            className="w-full rounded-lg bg-navy px-4 py-2 text-sm font-medium text-white hover:bg-navy/90"
+          >
+            {t('ad.newReview')}
+          </button>
+        </div>
+        <div className="px-4 pb-1 text-xs font-medium text-slate-400">{t('ad.historyTitle')}</div>
+        <div className="flex-1 overflow-y-auto px-2 pb-3">
+          {history.length === 0 && (
+            <p className="px-2 py-4 text-xs text-slate-400">{t('ad.noHistory')}</p>
+          )}
+          {history.map((h) => {
+            const color = h.status === 'risk' ? '#D9534F' : h.status === 'todo' ? '#E8A33D' : '#13AAA0'
+            return (
+              <div
+                key={h.ai_copy_id}
+                onClick={() => handleSelectReview(h.ai_copy_id)}
+                className="group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 hover:bg-gray-50"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm text-slate-700">{h.input_text || t('ad.untitledReview')}</p>
+                  <p className="text-[11px] text-slate-400">{(h.created_at ?? '').slice(0, 10)}</p>
+                </div>
+                <div className="ml-1 flex shrink-0 items-center gap-1">
+                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+                  <button
+                    onClick={(e) => handleDeleteReview(e, h.ai_copy_id)}
+                    title={t('ad.deleteReview')}
+                    className="rounded px-1 text-sm text-slate-300 opacity-0 transition hover:text-red-500 group-hover:opacity-100"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </aside>
+
+      {/* 오른쪽: 검토 입력/결과 */}
+      <div className="flex-1 overflow-y-auto p-8">
+        <div className="mx-auto max-w-2xl">
+          <h1 className="text-2xl font-bold text-navy mb-1">{t('ad.title')}</h1>
         <p className="text-sm text-slate-500 mb-6">
           {t('ad.desc')}
         </p>
@@ -383,6 +505,7 @@ export default function AdReview() {
             </button>
           </div>
         )}
+        </div>
       </div>
     </div>
   )
