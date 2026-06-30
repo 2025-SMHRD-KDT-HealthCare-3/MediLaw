@@ -1,7 +1,6 @@
 import { Routes, Route, Link, useNavigate } from 'react-router-dom'
 import Login from './pages/Login'
 import Chat from './pages/Chat'
-import Dashboard from './pages/Dashboard'
 import MyPage from './pages/MyPage'
 import ProtectedRoute from './components/ProtectedRoute'
 import { useAuthStore } from './store/authStore'
@@ -40,7 +39,6 @@ function App() {
         {isLoggedIn ? (
           <>
             <Link to="/chat" className="hover:text-aqua">{t('nav.chat')}</Link>
-            <Link to="/dashboard" className="hover:text-aqua">{t('nav.dashboard')}</Link>
             <Link to="/ad-review" className="hover:text-aqua">{t('nav.adReview')}</Link>
             <Link to="/checklist" className="hover:text-aqua">{t('nav.checklist')}</Link>
             <Link to="/law-updates" className="hover:text-aqua">{t('nav.lawUpdates')}</Link>
@@ -55,7 +53,6 @@ function App() {
         ) : (
           <div className="ml-auto flex items-center gap-3">
             {LangToggle}
-            <Link to="/login" className="hover:text-aqua">{t('nav.login')}</Link>
           </div>
         )}
       </nav>
@@ -64,7 +61,6 @@ function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/chat" element={<ProtectedRoute><Chat /></ProtectedRoute>} />
-        <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/ad-review" element={<ProtectedRoute><AdReview /></ProtectedRoute>} />
         <Route path="/checklist" element={<ProtectedRoute><Checklist /></ProtectedRoute>} />
         <Route path="/law-updates" element={<ProtectedRoute><LawUpdates /></ProtectedRoute>} />

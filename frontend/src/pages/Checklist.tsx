@@ -4,6 +4,8 @@ import { getRooms } from '../api/chat'
 import { getRoomSummaries, createRoomSummary, parseSummary, type ChecklistView } from '../api/checklistApi'
 import { useLang } from '../i18n/LanguageContext'
 import type { ChecklistItem, ChecklistStatus } from '../types/checklist'
+import LoadingWait from '../components/LoadingWait'
+import { friendlyError } from '../utils/apiError'
 
 const NAVY = '#14304A'
 const SUBBLUE = '#4A90D9'
@@ -59,7 +61,7 @@ export default function Checklist() {
         if (alive) setData(summaries.length > 0 ? parseSummary(summaries[0]) : null)
       } catch (e) {
         console.error('체크리스트 조회 실패:', e)
-        if (alive) setError(t('checklist.loadFailed'))
+        if (alive) setError(friendlyError(e, t, 'checklist.loadFailed'))
       } finally {
         if (alive) setLoading(false)
       }
@@ -84,7 +86,7 @@ export default function Checklist() {
       console.error('체크리스트 생성 실패:', e)
       const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
       // 방에 대화이력이 없으면 백엔드가 'room has no chat history'를 반환
-      setError(msg?.includes('history') ? t('checklist.emptyHistory') : (msg ?? t('checklist.genFailed')))
+      setError(msg?.includes('history') ? t('checklist.emptyHistory') : friendlyError(e, t, 'checklist.genFailed'))
     } finally {
       setGenerating(false)
     }
@@ -105,11 +107,7 @@ export default function Checklist() {
       <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
         <div className="mx-auto max-w-2xl">
           <Header />
-          <div className="flex flex-col items-center justify-center py-28">
-            <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200"
-                 style={{ borderTopColor: NAVY }} />
-            <p className="mt-4 text-sm font-medium" style={{ color: NAVY }}>{t('checklist.loadingSaved')}</p>
-          </div>
+          <LoadingWait compact title={t('checklist.loadingSaved')} />
         </div>
       </div>
     )
@@ -121,12 +119,7 @@ export default function Checklist() {
       <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
         <div className="mx-auto max-w-2xl">
           <Header />
-          <div className="flex flex-col items-center justify-center py-28">
-            <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200"
-                 style={{ borderTopColor: NAVY }} />
-            <p className="mt-4 text-sm font-medium" style={{ color: NAVY }}>{t('checklist.generating')}</p>
-            <p className="mt-1 text-xs text-slate-400">{t('checklist.generatingSub')}</p>
-          </div>
+          <LoadingWait title={t('checklist.generating')} hint={t('checklist.generatingSub')} />
         </div>
       </div>
     )
