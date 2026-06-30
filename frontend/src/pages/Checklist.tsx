@@ -1,13 +1,8 @@
 import { useEffect, useState } from 'react'
-import { getRooms, getChats } from '../api/chat'
-import { generateChecklist } from '../api/checklistApi'
+import { getRooms } from '../api/chat'
+import { getRoomSummaries, createRoomSummary, parseSummary, type ChecklistView } from '../api/checklistApi'
 import { useLang } from '../i18n/LanguageContext'
-import type {
-  ChecklistItem,
-  ChecklistStatus,
-  ChecklistResponse,
-  ChatTurn,
-} from '../types/checklist'
+import type { ChecklistItem, ChecklistStatus } from '../types/checklist'
 
 const NAVY = '#14304A'
 const SUBBLUE = '#4A90D9'
@@ -25,70 +20,98 @@ const statusMeta: Record<ChecklistStatus, { labelKey: string; color: string }> =
 }
 
 export default function Checklist() {
-  const { lang, t } = useLang()
-  const [data, setData] = useState<ChecklistResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { t } = useLang()
+  const [data, setData] = useState<ChecklistView | null>(null)
+  const [roomId, setRoomId] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)        // 진입 시 DB 조회
+  const [generating, setGenerating] = useState(false) // 생성 진행
   const [error, setError] = useState('')
   const [checked, setChecked] = useState<Record<string, boolean>>({})
 
+  // 진입 시: 최신 방의 '저장된' 체크리스트를 DB에서 불러온다.
+  // (예전처럼 매번 RAG로 새로 생성하지 않는다. 저장된 게 없으면 생성 버튼만 보여준다.)
   useEffect(() => {
     let alive = true
-
-    const run = async () => {
+    const load = async () => {
       try {
         setLoading(true)
         setError('')
 
-        // 1. 가장 최근 상담방 찾기
         const roomsRes = await getRooms()
         const rooms = roomsRes?.data ?? []
         if (rooms.length === 0) {
           if (alive) setError(t('checklist.noRoom'))
           return
         }
-        const latestRoom = rooms[0]
+        const latest = rooms[0]
+        if (alive) setRoomId(latest.room_id)
 
-        // 2. 그 방의 대화 가져와서 ChatTurn[]으로 변환
-        const chatsRes = await getChats(latestRoom.room_id)
-        const chats = chatsRes?.data ?? []
-        const history: ChatTurn[] = chats.map((c: { speaker_type: string; chat_text: string }) => ({
-          role: c.speaker_type === 'USER' ? 'user' : 'assistant',
-          content: c.chat_text,
-        }))
-
-        if (history.length === 0) {
-          if (alive) setError(t('checklist.emptyHistory'))
-          return
-        }
-
-        // 3. 체크리스트 생성 요청 (lang 반영, 수~수십 초 소요)
-        const res = await generateChecklist({ history, lang })
-        if (alive) setData(res)
+        const summaries = await getRoomSummaries(latest.room_id)
+        if (alive) setData(summaries.length > 0 ? parseSummary(summaries[0]) : null)
       } catch (e) {
-        console.error('체크리스트 생성 실패:', e)
-        if (alive) setError(t('checklist.genFailed'))
+        console.error('체크리스트 조회 실패:', e)
+        if (alive) setError(t('checklist.loadFailed'))
       } finally {
         if (alive) setLoading(false)
       }
     }
 
-    run()
+    load()
     return () => {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lang]) // 언어 바뀌면 재생성
+  }, [])
+
+  // 버튼: 생성 + 즉시 저장 → 화면 표시. 재진입 시엔 위 load가 DB에서 그대로 불러온다.
+  const handleGenerate = async () => {
+    if (!roomId || generating) return
+    try {
+      setGenerating(true)
+      setError('')
+      const rec = await createRoomSummary(roomId)
+      setData(parseSummary(rec))
+    } catch (e: unknown) {
+      console.error('체크리스트 생성 실패:', e)
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      // 방에 대화이력이 없으면 백엔드가 'room has no chat history'를 반환
+      setError(msg?.includes('history') ? t('checklist.emptyHistory') : (msg ?? t('checklist.genFailed')))
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   const toggle = (id: string) => setChecked((c) => ({ ...c, [id]: !c[id] }))
 
-  // 로딩 상태
+  // 공통 헤더 (제목 줄)
+  const Header = () => (
+    <div className="mb-6 flex items-center justify-between">
+      <h1 className="text-2xl font-bold" style={{ color: NAVY }}>{t('checklist.title')}</h1>
+    </div>
+  )
+
+  // 진입 로딩 (DB 조회 중)
   if (loading) {
     return (
       <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
         <div className="mx-auto max-w-2xl">
-          <div className="mb-6 flex items-center justify-between">
-            <h1 className="text-2xl font-bold" style={{ color: NAVY }}>{t('checklist.title')}</h1>
+          <Header />
+          <div className="flex flex-col items-center justify-center py-28">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200"
+                 style={{ borderTopColor: NAVY }} />
+            <p className="mt-4 text-sm font-medium" style={{ color: NAVY }}>{t('checklist.loadingSaved')}</p>
           </div>
+        </div>
+      </div>
+    )
+  }
+
+  // 생성 진행 중
+  if (generating) {
+    return (
+      <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
+        <div className="mx-auto max-w-2xl">
+          <Header />
           <div className="flex flex-col items-center justify-center py-28">
             <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200"
                  style={{ borderTopColor: NAVY }} />
@@ -100,25 +123,51 @@ export default function Checklist() {
     )
   }
 
-  // 에러 / 빈 상태
-  if (error || !data) {
+  // 에러 상태
+  if (error) {
     return (
       <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
         <div className="mx-auto max-w-2xl">
-          <div className="mb-6 flex items-center justify-between">
-            <h1 className="text-2xl font-bold" style={{ color: NAVY }}>{t('checklist.title')}</h1>
-          </div>
+          <Header />
           <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
-            <p className="text-sm text-slate-500">
-              {error || t('checklist.loadFailed')}
-            </p>
+            <p className="text-sm text-slate-500">{error}</p>
+            {roomId && (
+              <button
+                onClick={handleGenerate}
+                className="mt-4 rounded-lg px-5 py-2 text-sm font-medium text-white"
+                style={{ backgroundColor: NAVY }}
+              >
+                {t('checklist.generate')}
+              </button>
+            )}
           </div>
         </div>
       </div>
     )
   }
 
-  const s = data.checklist_summary
+  // 저장된 체크리스트가 없음 → 생성 안내 + 버튼 (자동 생성하지 않음)
+  if (!data) {
+    return (
+      <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
+        <div className="mx-auto max-w-2xl">
+          <Header />
+          <div className="rounded-xl border border-slate-200 bg-white p-10 text-center">
+            <p className="text-sm text-slate-500">{t('checklist.empty')}</p>
+            <button
+              onClick={handleGenerate}
+              className="mt-5 rounded-lg px-6 py-2.5 text-sm font-medium text-white"
+              style={{ backgroundColor: NAVY }}
+            >
+              {t('checklist.generate')}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const s = data.summary
   const doneCount = data.checklist.filter((i) => checked[i.id] || i.status === 'ok').length
 
   return (
