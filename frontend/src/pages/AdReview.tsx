@@ -108,6 +108,7 @@ export default function AdReview() {
   const [error, setError] = useState('')
   const [genLoading, setGenLoading] = useState(false)
   const [view, setView] = useState<'list' | 'graph'>('list')
+  const [showDetails, setShowDetails] = useState(false) // 부분별 검토(쟁점·관계도) 펼치기
   const [history, setHistory] = useState<AdHistoryItem[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(true) // 사이드바 접기/펼치기
 
@@ -384,6 +385,37 @@ export default function AdReview() {
 
         {result && (
           <div className="mt-6 space-y-4">
+            {/* 전체 수정 전후 비교 — 기본으로 바로 표시 */}
+            {result.revision && result.revision !== result.inputText ? (
+              <div className="rounded-xl border border-aqua bg-white p-6">
+                <p className="mb-3 text-sm font-semibold text-navy">{t('ad.compareTitle')}</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="max-h-72 overflow-auto rounded-lg border border-red-100 bg-red-50/60 p-3">
+                    <p className="mb-1 text-xs font-medium text-red-600">{t('ad.beforeLabel')}</p>
+                    <p className="whitespace-pre-wrap text-sm text-slate-700">{result.inputText}</p>
+                  </div>
+                  <div className="max-h-72 overflow-auto rounded-lg border border-teal-100 bg-teal-50/60 p-3">
+                    <p className="mb-1 text-xs font-medium text-teal-700">{t('ad.afterLabel')}</p>
+                    <p className="whitespace-pre-wrap text-sm text-slate-700">{result.revision}</p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-gray-200 bg-white p-6 text-sm text-slate-500">
+                {t('ad.noChange')}
+              </div>
+            )}
+
+            {/* 부분별 검토(쟁점·관계도)는 버튼으로 펼쳐 보기 */}
+            <button
+              onClick={() => setShowDetails((v) => !v)}
+              className="w-full rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-slate-600 hover:bg-gray-50"
+            >
+              {showDetails ? t('ad.hideDetails') : t('ad.showDetails')}
+            </button>
+
+            {showDetails && (
+              <>
             {/* 요약 + 보기 전환(목록 / 관계도) */}
             <div className="flex flex-wrap items-center justify-between gap-2">
               {result.summary ? (
@@ -421,10 +453,16 @@ export default function AdReview() {
             {view === 'graph' && (
               <>
                 <AdReviewGraph
-                  inputText={result.inputText}
-                  items={result.checklist}
                   centerLabel={t('ad.graphInput')}
+                  inputSnippet={result.inputText}
                   emptyLabel={t('ad.statusOk')}
+                  items={result.checklist}
+                  statusLabels={{
+                    risk: t('ad.statusRisk'),
+                    todo: t('ad.statusTodo'),
+                    ok: t('ad.statusOk'),
+                    na: t('ad.statusNa'),
+                  }}
                 />
                 {/* 색상 범례 */}
                 <div className="flex flex-wrap gap-3 text-xs text-slate-500">
@@ -491,22 +529,7 @@ export default function AdReview() {
                 )
               })
             ))}
-
-            {/* 수정 전후 비교 — 문서 전체 원문과 수정본을 한 화면에서 대조 */}
-            {result.revision && result.revision !== result.inputText && (
-              <div className="rounded-xl border border-aqua bg-white p-6">
-                <p className="mb-3 text-sm font-semibold text-navy">{t('ad.compareTitle')}</p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="max-h-72 overflow-auto rounded-lg border border-red-100 bg-red-50/60 p-3">
-                    <p className="mb-1 text-xs font-medium text-red-600">{t('ad.beforeLabel')}</p>
-                    <p className="whitespace-pre-wrap text-sm text-slate-700">{result.inputText}</p>
-                  </div>
-                  <div className="max-h-72 overflow-auto rounded-lg border border-teal-100 bg-teal-50/60 p-3">
-                    <p className="mb-1 text-xs font-medium text-teal-700">{t('ad.afterLabel')}</p>
-                    <p className="whitespace-pre-wrap text-sm text-slate-700">{result.revision}</p>
-                  </div>
-                </div>
-              </div>
+              </>
             )}
 
             {/* 검토 결과를 체크리스트로 저장 → 대시보드에서 불러오기 */}

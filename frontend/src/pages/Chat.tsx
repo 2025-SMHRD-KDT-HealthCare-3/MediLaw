@@ -19,6 +19,7 @@ interface RoomItem {
   room_id: number
   room_title: string
   created_at?: string
+  display: string // 사이드바 표시 제목 (첫 질문 우선, 없으면 room_title)
 }
 
 function fmtDate(s?: string) {
@@ -46,11 +47,28 @@ export default function Chat() {
 
   const loadRooms = async (): Promise<RoomItem[]> => {
     const res = await getRooms()
-    const list: RoomItem[] = (res.data ?? []).map((r: { room_id: number; room_title: string; created_at?: string }) => ({
-      room_id: r.room_id,
-      room_title: r.room_title,
-      created_at: r.created_at,
-    }))
+    const base: { room_id: number; room_title: string; created_at?: string }[] = (res.data ?? []).map(
+      (r: { room_id: number; room_title: string; created_at?: string }) => ({
+        room_id: r.room_id,
+        room_title: r.room_title,
+        created_at: r.created_at,
+      }),
+    )
+    // 실제 LLM 챗봇처럼 '첫 질문'을 제목으로 — 방마다 첫 사용자 메시지를 가져와 표시 제목으로 쓴다.
+    // (없으면 room_title 폴백) 기존 방까지 적용되도록 병렬 조회.
+    const list: RoomItem[] = await Promise.all(
+      base.map(async (r) => {
+        try {
+          const cr = await getChats(r.room_id)
+          const chats: { speaker_type: string; chat_text: string }[] = cr.data ?? []
+          const firstUser = chats.find((c) => c.speaker_type === 'USER')?.chat_text
+          const display = (firstUser && firstUser.trim().slice(0, 40)) || r.room_title || ''
+          return { ...r, display }
+        } catch {
+          return { ...r, display: r.room_title || '' }
+        }
+      }),
+    )
     setRooms(list)
     return list
   }
@@ -232,7 +250,7 @@ export default function Chat() {
               }`}
             >
               <div className="min-w-0">
-                <p className="truncate text-sm text-white/90">{r.room_title || t('chat.untitled')}</p>
+                <p className="truncate text-sm text-white/90">{r.display || t('chat.untitled')}</p>
                 <p className="text-[11px] text-white/40">{fmtDate(r.created_at)}</p>
               </div>
               <button
