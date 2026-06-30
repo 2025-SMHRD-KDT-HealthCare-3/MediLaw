@@ -5,9 +5,13 @@
 2. 조문 정확성 (clause accuracy)
 3. 판례 유효성 (case law validity)
 4. 시점 적합성 (temporal relevance, as_of)
+
+주의: 위 4축은 모두 구조·시점 검증이다. 인용한 내용(의미)이 실제 조문/판례의
+취지와 일치하는지는 검증 범위가 아니다 — 번호가 실재해도 설명이 틀릴 수 있다.
 """
 import re
 
+from app import config
 from app.db import db
 from app.schemas import CitationInput, VerifyResult, VerifySummary
 
@@ -16,7 +20,8 @@ def _grade(exists: bool, clause_accurate, valid_as_of, trust_grade=None) -> tupl
     """검증 신호 → (신뢰 점수 0~100, 상태 확인|주의|오류).
 
     오류 = 존재하지 않거나 조문 불일치(환각). 주의 = 존재하나 그 시점엔 미발효/이후 선고.
-    확인 = 핵심 검증 통과(미검증 항목만큼 소폭 감점).
+    확인 = 구조 검증 통과(법령·조문·항 실재 + 시점 유효, 미검증 항목만큼 소폭 감점).
+           내용(의미) 일치는 검증하지 않으므로 '확인'이 내용 정확성을 보증하진 않는다.
     trust_grade = 출처 등급('A' 권위 높음 / 'B' 행정규칙 등 낮음). 권위 차이는 환각이
     아니므로 status는 바꾸지 않고 점수만 소폭 보정한다.
     """
@@ -62,6 +67,140 @@ _CASE_RE = re.compile(r"\b(\d{2,4}\s*[가-힣]{1,3}\s*\d+)\b")
 
 def _compact(date_str: str) -> str:
     return re.sub(r"\D", "", date_str or "")
+
+
+# ── 내용 일치(content faithfulness) 검증 — 별도 레이어 ──────────────────────
+# 인용 주변 '주장 문장' ↔ 실제 조문/판례 본문을 임베딩 코사인 유사도로 비교.
+# 검색 인덱스(app.rag, small/512·캐시)와 독립적으로 내용검사 전용 임베딩
+# (CONTENT_EMBED_MODEL=large/3072)을 직접 호출한다 — 모델/차원·캐시키 충돌 방지.
+# 짧은 주장↔긴 본문 비교의 분리력을 높이려 본문을 조항 단위 청크로 쪼개 claim과의
+# '최대 코사인'을 쓴다. 키 없음/빈입력/예외 시 None(graceful skip → content_match=None).
+
+# 본문 청크 경계: 줄바꿈/마침표/。/원숫자 항 경계(앞쪽 lookahead). 길이>=6, 최대 30개.
+_CHUNK_SPLIT_RE = re.compile(r"(?:[.。\n\r]+|(?=[①-⑮]))")
+_CHUNK_MIN_LEN = 6
+_CHUNK_MAX = 30
+
+# 내용검사 전용 임베딩 캐시(rag 캐시와 분리). 키=(model,dim,text) → 벡터(list[float]).
+# 동일 본문 청크/주장을 인용마다 재임베딩하는 비용을 줄인다. 단순 bounded dict.
+_CONTENT_EMBED_CACHE: dict[tuple, list[float]] = {}
+_CONTENT_EMBED_CACHE_MAX = 2048
+
+
+def _content_chunks(content: str) -> list[str]:
+    """본문을 조항 단위 청크로 분리(길이>=6, 최대 30개). 없으면 본문 통째 1개."""
+    parts = [p.strip() for p in _CHUNK_SPLIT_RE.split(content or "")]
+    parts = [p for p in parts if len(p) >= _CHUNK_MIN_LEN]
+    if not parts:
+        c = (content or "").strip()
+        return [c] if c else []
+    return parts[:_CHUNK_MAX]
+
+
+def _content_embed(texts: list[str]) -> list[list[float]] | None:
+    """내용검사 전용 임베딩(large/3072). 캐시 적중분 제외하고 1회 배치 호출.
+
+    키 없음/실패 시 None(graceful). 반환은 입력과 같은 순서·길이.
+    """
+    if not texts:
+        return []
+    if not config.OPENAI_API_KEY:
+        return None
+    model, dim = config.CONTENT_EMBED_MODEL, config.CONTENT_EMBED_DIM
+    out: list[list[float] | None] = [None] * len(texts)
+    miss: dict[str, list[int]] = {}
+    for i, t in enumerate(texts):
+        cached = _CONTENT_EMBED_CACHE.get((model, dim, t))
+        if cached is not None:
+            out[i] = cached
+        else:
+            miss.setdefault(t, []).append(i)
+    if miss:
+        uniq = list(miss.keys())
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=config.OPENAI_API_KEY)
+            resp = client.embeddings.create(model=model, input=uniq, dimensions=dim)
+            by_idx = {d.index: d.embedding for d in resp.data}
+        except Exception:
+            return None
+        for j, t in enumerate(uniq):
+            vec = by_idx.get(j)
+            if vec is None:
+                return None  # 부분 실패 → 전체 graceful skip
+            if len(_CONTENT_EMBED_CACHE) < _CONTENT_EMBED_CACHE_MAX:
+                _CONTENT_EMBED_CACHE[(model, dim, t)] = vec
+            for pos in miss[t]:
+                out[pos] = vec
+    return out  # 이 시점엔 전부 채워짐
+
+
+def _content_similarity(claim: str, content: str) -> float | None:
+    """주장 ↔ 본문 청크-최대 코사인 유사도(0~1). 키 없음·실패·빈입력이면 None."""
+    if not claim or not content:
+        return None
+    chunks = _content_chunks(content)
+    if not chunks:
+        return None
+    try:
+        import numpy as np
+
+        embs = _content_embed([claim] + chunks)
+        if not embs or embs[0] is None:  # 키 없음/실패 → graceful skip
+            return None
+        cvec = np.asarray(embs[0], dtype=np.float32)
+        cnorm = np.linalg.norm(cvec) or 1.0
+        best = None
+        for e in embs[1:]:
+            v = np.asarray(e, dtype=np.float32)
+            sim = float(cvec @ v / (cnorm * (np.linalg.norm(v) or 1.0)))
+            if best is None or sim > best:
+                best = sim
+        return best
+    except Exception:
+        return None
+
+
+# 내용검증은 '실질적 주장'에만 작동시킨다. 주장에서 인용 토큰(법령·판례)을 제거한 뒤
+# 남는 의미 텍스트(한글·영숫자)가 이 글자수 미만이면 단순 인용·나열로 보고 skip한다
+# — "의료법 제27조와 제56조" 같은 인용 나열에 오탐 다운그레이드가 나지 않게.
+_CLAIM_MIN_SUBSTANTIVE = 10
+
+
+def _apply_content_check(result: VerifyResult, claim: str | None, content: str | None) -> VerifyResult:
+    """구조 검증 결과에 내용 일치 검증을 후처리(플래그 ON일 때만).
+
+    - 유사도 계산됨 && < THRESHOLD && status=='확인' → '주의'로 다운그레이드(오류 단정 X),
+      content_match=False, content_score=sim, note에 사유 추가.
+    - 유사도 >= THRESHOLD → content_match=True, content_score=sim (status 유지).
+    - 유사도 None(미검증/키없음) → content_match=None (불변).
+    구조상 이미 '오류'/'주의'면 status·점수는 건드리지 않는다(content_match/score만 기록).
+    """
+    if not config.CONTENT_CHECK:
+        return result
+    if not claim or not content:
+        return result  # claim 모름/본문 없음 → 미검증(None 유지)
+    # 실질적 '주장'에만 작동: 인용 토큰(법령·판례)을 제거한 뒤 남는 의미 텍스트가 짧으면
+    # (단순 인용·나열) 내용검증 skip — 인용 나열에 오탐 다운그레이드 방지.
+    bare = _CASE_RE.sub(" ", _STATUTE_RE.sub(" ", claim))
+    substance = re.sub(r"[^가-힣A-Za-z0-9]", "", bare)
+    if len(substance) < _CLAIM_MIN_SUBSTANTIVE:
+        return result
+    sim = _content_similarity(claim, content)
+    if sim is None:
+        return result  # 키없음/실패 → content_match=None 유지
+    result.content_score = round(sim, 4)
+    threshold = config.CONTENT_SIM_THRESHOLD
+    if sim < threshold:
+        result.content_match = False
+        if result.status == "확인":  # 구조상 통과인데 내용이 다름 → 주의로 다운그레이드
+            result.status = "주의"
+            extra = f"인용 내용이 조문 본문과 의미가 다를 수 있음(유사도 {sim:.2f})"
+            result.note = f"{result.note}; {extra}" if result.note else extra
+    else:
+        result.content_match = True
+    return result
 
 
 def _match_statute(law_name: str):
@@ -142,7 +281,7 @@ def _cross_check_revisions(s, as_of, score, status, notes) -> tuple[int, str]:
 
 
 def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str | None,
-                   paragraph_no: int | None = None) -> VerifyResult:
+                   paragraph_no: int | None = None, claim: str | None = None) -> VerifyResult:
     s = _match_statute(law_name)
     if not s:
         score, status = _grade(False, None, None)
@@ -156,6 +295,7 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
     paragraph_missing = False
     article_url = s["source_url"] or ""
     matched_label = s["name"]
+    article_content = None  # 내용 일치 검증용 조문 본문
     if article_no:
         # 'N' 또는 'N의M' 형태 모두 시도
         variants = [article_no, article_no.replace("-", "의")]
@@ -166,14 +306,21 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
             (s["id"], *variants),
         ).fetchone()
         clause_accurate = art is not None
+        if art:
+            article_content = art["content"]
         matched_label = f"{s['name']} 제{article_no}조"
         if art and art["article_title"]:
             matched_label += f"({art['article_title']})"
-        # 항(項) 검증: 조문 본문(content)에 해당 항이 실제로 존재하는지 확인
-        if art and paragraph_no is not None and 1 <= paragraph_no <= len(_CIRCLED):
+        # 항(項) 검증: 조문 본문(content)에 해당 항이 실제로 존재하는지 확인.
+        # 항은 원숫자 ①~⑮로 표기 → 본문에 실재하는 최대 항을 기준으로 범위를 본다.
+        # 마커가 없으면 단일 항(제1항)으로 간주. 실재 최대 항(또는 ⑮)을 넘는 항은 환각.
+        if art and paragraph_no is not None:
             content = art["content"] or ""
-            symbol = _CIRCLED[paragraph_no - 1]
-            if symbol in content:
+            present = [i + 1 for i, sym in enumerate(_CIRCLED) if sym in content]
+            max_para = max(present) if present else 1
+            if 1 <= paragraph_no <= max_para and (
+                not present or _CIRCLED[paragraph_no - 1] in content
+            ):
                 matched_label += f" 제{paragraph_no}항"
             else:
                 clause_accurate = False
@@ -215,19 +362,27 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
     # 데이터 없으면(테이블 부재/빈 테이블/해당 law_id 행 없음) 완전히 스킵 → 기존 동작 유지.
     score, status = _cross_check_revisions(s, as_of, score, status, notes)
 
-    return VerifyResult(
+    note = "; ".join(notes)
+    if status == "확인" and not note:
+        # 사용자가 '확인'을 내용 검증으로 오해하지 않도록 검증 범위를 명시.
+        note = "법령·조문·항 실재 및 시점 확인(내용 일치는 미검증)"
+    result = VerifyResult(
         raw=raw, type="statute", exists=True,
         clause_accurate=clause_accurate, valid_as_of=valid_as_of,
         verified=verified, trust_score=score, status=status,
         matched_label=matched_label,
-        matched_source_url=article_url, note="; ".join(notes),
+        matched_source_url=article_url, note=note,
     )
+    # 내용 일치 검증(플래그 ON & claim·본문 있을 때만). 조문 본문을 비교 대상으로.
+    return _apply_content_check(result, claim, article_content)
 
 
-def verify_case(case_no: str, raw: str, as_of: str | None) -> VerifyResult:
+def verify_case(case_no: str, raw: str, as_of: str | None,
+                claim: str | None = None) -> VerifyResult:
     cn = re.sub(r"\s", "", case_no)
     row = db().execute(
-        "SELECT id, case_name, court, date, source_url FROM cases WHERE case_no = ? LIMIT 1",
+        "SELECT id, case_name, court, date, summary, body, source_url "
+        "FROM cases WHERE case_no = ? LIMIT 1",
         (cn,),
     ).fetchone()
     if not row:
@@ -247,16 +402,47 @@ def verify_case(case_no: str, raw: str, as_of: str | None) -> VerifyResult:
     if valid_as_of is False:
         notes.append(f"{as_of} 이후 선고된 판례(선고일 {row['date']})")
     score, status = _grade(True, None, valid_as_of)
-    return VerifyResult(
+    note = "; ".join(notes)
+    if status == "확인" and not note:
+        # '확인'을 내용 검증으로 오해하지 않도록 검증 범위를 명시.
+        note = "판례 실재 및 시점 확인(내용 일치는 미검증)"
+    result = VerifyResult(
         raw=raw, type="case", exists=True, valid_as_of=valid_as_of,
         verified=valid_as_of is not False, trust_score=score, status=status,
         matched_label=label,
-        matched_source_url=row["source_url"] or "", note="; ".join(notes),
+        matched_source_url=row["source_url"] or "", note=note,
     )
+    # 내용 일치 검증(플래그 ON & claim·본문 있을 때만). 판례 요지(summary)·없으면 본문(body)을 비교 대상으로.
+    case_content = row["summary"] or row["body"]
+    return _apply_content_check(result, claim, case_content)
+
+
+# 문장 경계: 마침표·물음표·느낌표·줄바꿈 등. 인용을 포함하는 '주장 문장'을 잘라낼 때 사용.
+_SENT_SPLIT_RE = re.compile(r"[.!?。\n\r]+")
+
+
+def _claim_sentence(text: str, start: int, end: int) -> str:
+    """text의 [start,end) 매치를 포함하는 문장을 추출(주장 문맥). 내용 일치 검증용.
+
+    문장 경계(마침표·물음표·느낌표·줄바꿈)로 자르고, 매치를 포함하는 조각을 반환.
+    """
+    left = 0
+    right = len(text)
+    for m in _SENT_SPLIT_RE.finditer(text):
+        if m.end() <= start:
+            left = m.end()       # 매치 앞의 마지막 경계
+        elif m.start() >= end:
+            right = m.start()    # 매치 뒤의 첫 경계
+            break
+    return text[left:right].strip()
 
 
 def extract_and_verify(text: str, as_of: str | None) -> list[VerifyResult]:
-    """LLM 답변 원문에서 인용을 추출해 전부 검증."""
+    """LLM 답변 원문에서 인용을 추출해 전부 검증.
+
+    각 인용 매치마다 그것을 포함하는 '주장 문장'을 함께 넘겨 내용 일치 검증에 쓴다
+    (CONTENT_CHECK ON일 때만 사용; OFF면 무시되어 기존 동작 불변).
+    """
     results: list[VerifyResult] = []
     seen: set[str] = set()
 
@@ -268,8 +454,9 @@ def extract_and_verify(text: str, as_of: str | None) -> list[VerifyResult]:
         if key in seen:
             continue
         seen.add(key)
+        claim = _claim_sentence(text, m.start(), m.end())
         results.append(
-            verify_statute(law_name, article_no, m.group(0).strip(), as_of, paragraph_no))
+            verify_statute(law_name, article_no, m.group(0).strip(), as_of, paragraph_no, claim))
 
     for m in _CASE_RE.finditer(text):
         case_no = re.sub(r"\s", "", m.group(1))
@@ -278,7 +465,8 @@ def extract_and_verify(text: str, as_of: str | None) -> list[VerifyResult]:
         if key in seen:
             continue
         seen.add(key)
-        results.append(verify_case(case_no, m.group(0).strip(), as_of))
+        claim = _claim_sentence(text, m.start(), m.end())
+        results.append(verify_case(case_no, m.group(0).strip(), as_of, claim))
 
     return results
 

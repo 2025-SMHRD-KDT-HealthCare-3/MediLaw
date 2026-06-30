@@ -15,7 +15,10 @@ from app.config import (
     EMBED_DIM,
     EMBED_MODEL,
     OPENAI_API_KEY,
+    RAG_POOL,
     RRF_K,
+    STATUTE_BOOST,
+    STATUTE_TITLE_CAP,
 )
 from app.db import db, has_embeddings, vec_loaded
 from app.schemas import Hit
@@ -349,7 +352,7 @@ def hybrid_search(
         재임베딩을 건너뛴다(런타임 배치 임베딩용). None을 명시하면 벡터검색 생략(FTS 전용).
     """
     types = set(source_types) if source_types else {"statute", "case", *_DOC_TYPES}
-    pool = max(top_k * 3, 30)
+    pool = max(top_k * 3, RAG_POOL)
 
     fts = fts_search(query, types, pool)
     if qvec is _UNSET:
@@ -382,7 +385,28 @@ def hybrid_search(
         for rank, key in enumerate(ranklist):
             scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank + 1)
 
+    # 재랭킹: 핵심 법령(trust_grade='법령')을 제목 유사 행정규칙 위로 끌어올린다.
+    # statute 키의 sid는 article id → articles JOIN statutes 로 핵심 법령 여부 1회 조회.
+    if STATUTE_BOOST != 1.0:
+        art_ids = [sid for (st, sid) in scores if st == "statute"]
+        if art_ids:
+            ph = ",".join("?" * len(art_ids))
+            core = {
+                r["id"]
+                for r in db().execute(
+                    f"""SELECT a.id FROM articles a JOIN statutes s ON s.id = a.statute_id
+                        WHERE s.trust_grade = '법령' AND a.id IN ({ph})""",
+                    art_ids,
+                )
+            }
+            for key in scores:
+                if key[0] == "statute" and key[1] in core:
+                    scores[key] *= STATUTE_BOOST
+
     ordered = sorted(scores.items(), key=lambda x: -x[1])
+
+    _cap = STATUTE_TITLE_CAP
+    title_count: dict[str, int] = {}
 
     hits: list[Hit] = []
     as_of_c = _compact(as_of) if as_of else None
@@ -398,6 +422,14 @@ def hybrid_search(
             continue
         if as_of_c and hit.effective_from and hit.effective_from > as_of_c:
             continue  # 시점 필터: as_of 이후 발효/선고 자료 제외
+        # 조문명 다양성 캡: 같은 제목 statute 히트가 후보를 독식하지 않게 제한
+        # (제목 동일 행정규칙 다수가 핵심 법령을 밀어내는 문제 보정).
+        if _cap and stype == "statute":
+            t = re.sub(r"[^가-힣A-Za-z0-9]", "", hit.title or "")
+            if t:
+                if title_count.get(t, 0) >= _cap:
+                    continue
+                title_count[t] = title_count.get(t, 0) + 1
         hits.append(hit)
         if len(hits) >= top_k:
             break

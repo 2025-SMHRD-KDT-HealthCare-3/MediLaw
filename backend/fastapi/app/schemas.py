@@ -110,10 +110,14 @@ class VerifyResult(BaseModel):
     valid_as_of: Optional[bool] = None
     verified: bool
     trust_score: int = Field(0, ge=0, le=100, description="신뢰 점수 0~100")
-    status: Literal["확인", "주의", "오류"] = Field("오류", description="확인=신뢰 / 주의=조건부 / 오류=환각·불일치")
+    status: Literal["확인", "주의", "오류"] = Field("오류", description="확인=구조 검증 통과(법령·조문·항 실재 + 시점 유효, 내용 일치는 미검증) / 주의=조건부(시점 등) / 오류=환각·불일치")
     matched_label: str = ""
     matched_source_url: str = ""
     note: str = ""
+    content_match: Optional[bool] = Field(
+        None, description="인용 주장과 실제 본문의 의미 일치 여부. None=미검증(플래그 OFF·키없음·문맥부족)")
+    content_score: Optional[float] = Field(
+        None, description="본문 대비 의미 유사도 0~1, None=미검증")
 
 
 class VerifySummary(BaseModel):
@@ -122,7 +126,7 @@ class VerifySummary(BaseModel):
     failed: int
     avg_score: int = Field(0, ge=0, le=100, description="인용 전체 평균 신뢰 점수")
     worst_status: Literal["확인", "주의", "오류"] = Field(
-        "확인", description="가장 나쁜 항목의 상태(오류>주의>확인)")
+        "확인", description="가장 나쁜 항목의 상태(오류>주의>확인). 확인=구조 검증 통과(실재+시점, 내용 일치는 미검증)")
     min_score: int = Field(100, ge=0, le=100, description="최저 신뢰 점수(가장 약한 인용)")
 
 
