@@ -236,23 +236,23 @@ export default function AdReview() {
     <div className="flex min-h-screen bg-[#F7F8FA]">
       {/* 왼쪽: 광고검토 이력 사이드바 (실제 챗봇식 — 과거 검토 들어가기 / 새 검토) */}
       <aside
-        className={`flex shrink-0 flex-col border-r border-slate-200 bg-[#EEF2F7] transition-all duration-200 ${
-          sidebarOpen ? 'w-64' : 'w-0 overflow-hidden border-r-0'
+        className={`flex shrink-0 flex-col bg-navy transition-all duration-200 ${
+          sidebarOpen ? 'w-64' : 'w-0 overflow-hidden'
         }`}
       >
         <div className="p-2">
           <button
             onClick={handleNewReview}
-            className="flex w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-navy shadow-sm transition hover:bg-slate-50"
+            className="flex w-full items-center gap-2 rounded-lg border border-white/20 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/10"
           >
             <span className="text-base leading-none text-aqua">＋</span>
             <span>{t('ad.newReview')}</span>
           </button>
         </div>
-        <div className="px-3 pb-1 pt-1 text-[11px] font-semibold tracking-wide text-slate-400">{t('ad.historyTitle')}</div>
+        <div className="px-3 pb-1 pt-1 text-[11px] font-semibold tracking-wide text-white/50">{t('ad.historyTitle')}</div>
         <div className="flex-1 overflow-y-auto px-2 pb-3">
           {history.length === 0 && (
-            <p className="px-2 py-4 text-xs text-slate-400">{t('ad.noHistory')}</p>
+            <p className="px-2 py-4 text-xs text-white/40">{t('ad.noHistory')}</p>
           )}
           {history.map((h) => {
             const color = h.status === 'risk' ? '#D9534F' : h.status === 'todo' ? '#E8A33D' : '#13AAA0'
@@ -260,18 +260,18 @@ export default function AdReview() {
               <div
                 key={h.ai_copy_id}
                 onClick={() => handleSelectReview(h.ai_copy_id)}
-                className="group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 transition hover:bg-white/60"
+                className="group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 transition hover:bg-white/10"
               >
                 <div className="min-w-0">
-                  <p className="truncate text-sm text-slate-700">{h.input_text || t('ad.untitledReview')}</p>
-                  <p className="text-[11px] text-slate-400">{(h.created_at ?? '').slice(0, 10)}</p>
+                  <p className="truncate text-sm text-white/90">{h.input_text || t('ad.untitledReview')}</p>
+                  <p className="text-[11px] text-white/40">{(h.created_at ?? '').slice(0, 10)}</p>
                 </div>
                 <div className="ml-1 flex shrink-0 items-center gap-1">
                   <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
                   <button
                     onClick={(e) => handleDeleteReview(e, h.ai_copy_id)}
                     title={t('ad.deleteReview')}
-                    className="rounded px-1 text-sm text-slate-300 opacity-0 transition hover:text-red-500 group-hover:opacity-100"
+                    className="rounded px-1 text-sm text-white/40 opacity-0 transition hover:text-red-400 group-hover:opacity-100"
                   >
                     ✕
                   </button>
