@@ -205,40 +205,40 @@ export default function Chat() {
     <div className="flex bg-[#F7F8FA]" style={{ height: 'calc(100vh - 60px)' }}>
       {/* 사이드바 — 대화 목록 (실제 챗봇처럼 이전 대화 들어가기 / 새 채팅) */}
       <aside
-        className={`flex flex-col border-r border-slate-200 bg-[#EEF2F7] transition-all duration-200 ${
-          sidebarOpen ? 'w-64' : 'w-0 overflow-hidden border-r-0'
+        className={`flex flex-col bg-navy transition-all duration-200 ${
+          sidebarOpen ? 'w-64' : 'w-0 overflow-hidden'
         }`}
       >
         <div className="p-2">
           <button
             onClick={handleNewChat}
-            className="flex w-full items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-navy shadow-sm transition hover:bg-slate-50"
+            className="flex w-full items-center gap-2 rounded-lg border border-white/20 px-3 py-2 text-sm font-medium text-white transition hover:bg-white/10"
           >
             <span className="text-base leading-none text-aqua">＋</span>
             <span>{t('chat.newChat')}</span>
           </button>
         </div>
-        <div className="px-3 pb-1 pt-1 text-[11px] font-semibold tracking-wide text-slate-400">{t('chat.roomListTitle')}</div>
+        <div className="px-3 pb-1 pt-1 text-[11px] font-semibold tracking-wide text-white/50">{t('chat.roomListTitle')}</div>
         <div className="flex-1 overflow-y-auto px-2 pb-3">
           {rooms.length === 0 && (
-            <p className="px-2 py-4 text-xs text-slate-400">{t('chat.noRooms')}</p>
+            <p className="px-2 py-4 text-xs text-white/40">{t('chat.noRooms')}</p>
           )}
           {rooms.map((r) => (
             <div
               key={r.room_id}
               onClick={() => handleSelectRoom(r.room_id)}
               className={`group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 transition ${
-                r.room_id === roomId ? 'bg-white shadow-sm' : 'hover:bg-white/60'
+                r.room_id === roomId ? 'bg-white/15' : 'hover:bg-white/10'
               }`}
             >
               <div className="min-w-0">
-                <p className="truncate text-sm text-slate-700">{r.room_title || t('chat.untitled')}</p>
-                <p className="text-[11px] text-slate-400">{fmtDate(r.created_at)}</p>
+                <p className="truncate text-sm text-white/90">{r.room_title || t('chat.untitled')}</p>
+                <p className="text-[11px] text-white/40">{fmtDate(r.created_at)}</p>
               </div>
               <button
                 onClick={(e) => handleDeleteRoom(e, r.room_id)}
                 title={t('chat.deleteRoom')}
-                className="ml-1 shrink-0 rounded px-1.5 text-sm text-slate-300 opacity-0 transition hover:text-red-500 group-hover:opacity-100"
+                className="ml-1 shrink-0 rounded px-1.5 text-sm text-white/40 opacity-0 transition hover:text-red-400 group-hover:opacity-100"
               >
                 ✕
               </button>
