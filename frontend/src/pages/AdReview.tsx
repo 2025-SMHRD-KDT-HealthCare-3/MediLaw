@@ -16,6 +16,7 @@ interface ChecklistItem {
   title: string
   reason?: string
   status?: string
+  suggestion?: string
   citations?: Citation[]
 }
 interface ParsedResult {
@@ -82,9 +83,10 @@ export default function AdReview() {
 
       const checklist: ChecklistItem[] = findings.map((f, i) => ({
         id: String(f.segment_index ?? i),
-        title: f.segment_text,                  // 위험 문구 원문
+        title: f.segment_text,                  // 위험 문구 원문(수정 전)
         reason: f.issue,                        // 위험 사유 (근거 법령은 문장 끝 "(근거: …)")
         status: RISK_MAP[f.risk_level] ?? 'na', // high→위반소지 / medium→확인필요 / low→문제없음
+        suggestion: f.suggestion,               // 대안 문구(수정 후) — 엔진이 세그먼트별로 제공
         citations: f.citations ?? [],           // 비어 올 수 있음
       }))
 
@@ -246,8 +248,7 @@ export default function AdReview() {
                 const s = ITEM_STYLE[item.status ?? ''] ?? ITEM_STYLE.na
                 return (
                   <div key={item.id} className="rounded-xl border border-gray-200 bg-white p-6">
-                    <div className="mb-2 flex items-start justify-between gap-3">
-                      <p className="text-sm font-semibold text-navy">{item.title}</p>
+                    <div className="mb-3 flex items-center justify-end">
                       <span
                         className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
                         style={{ color: s.color, backgroundColor: `${s.color}1A` }}
@@ -255,8 +256,21 @@ export default function AdReview() {
                         ● {t(s.labelKey)}
                       </span>
                     </div>
+                    {/* 수정 전(위험 원문) / 수정 후(대안 문구)를 한 카드에서 나란히 비교 */}
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-lg border border-red-100 bg-red-50/60 p-3">
+                        <p className="mb-1 text-xs font-medium text-red-600">{t('ad.beforeLabel')}</p>
+                        <p className="whitespace-pre-wrap text-sm text-slate-700">{item.title}</p>
+                      </div>
+                      {item.suggestion && item.suggestion.trim() && (
+                        <div className="rounded-lg border border-teal-100 bg-teal-50/60 p-3">
+                          <p className="mb-1 text-xs font-medium text-teal-700">{t('ad.afterLabel')}</p>
+                          <p className="whitespace-pre-wrap text-sm text-slate-700">{item.suggestion}</p>
+                        </div>
+                      )}
+                    </div>
                     {item.reason && (
-                      <p className="text-sm text-slate-600">{item.reason}</p>
+                      <p className="mt-3 text-sm text-slate-600">{item.reason}</p>
                     )}
                     {item.citations && item.citations.length > 0 && (
                       <div className="mt-3 border-t border-gray-100 pt-3">
@@ -281,11 +295,20 @@ export default function AdReview() {
               })
             )}
 
-            {/* 수정 추천 */}
+            {/* 수정 전후 비교 — 문서 전체 원문과 수정본을 한 화면에서 대조 */}
             {result.revision && result.revision !== result.inputText && (
-              <div className="rounded-xl border border-aqua bg-cyan-50 p-6">
-                <p className="mb-1 text-xs font-medium text-slate-500">{t('ad.revisionLabel')}</p>
-                <p className="text-sm font-medium text-navy">{result.revision}</p>
+              <div className="rounded-xl border border-aqua bg-white p-6">
+                <p className="mb-3 text-sm font-semibold text-navy">{t('ad.compareTitle')}</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="max-h-72 overflow-auto rounded-lg border border-red-100 bg-red-50/60 p-3">
+                    <p className="mb-1 text-xs font-medium text-red-600">{t('ad.beforeLabel')}</p>
+                    <p className="whitespace-pre-wrap text-sm text-slate-700">{result.inputText}</p>
+                  </div>
+                  <div className="max-h-72 overflow-auto rounded-lg border border-teal-100 bg-teal-50/60 p-3">
+                    <p className="mb-1 text-xs font-medium text-teal-700">{t('ad.afterLabel')}</p>
+                    <p className="whitespace-pre-wrap text-sm text-slate-700">{result.revision}</p>
+                  </div>
+                </div>
               </div>
             )}
 
