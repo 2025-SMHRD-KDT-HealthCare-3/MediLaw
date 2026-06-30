@@ -10,35 +10,53 @@ import Signup from './pages/Signup'
 import Home from './pages/Home'
 import LawUpdates from './pages/LawUpdates'
 import Checklist from './pages/Checklist'
+import { useLang } from './i18n/LanguageContext'
 
 function App() {
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn)
   const logout = useAuthStore((s) => s.logout)
   const navigate = useNavigate()
+  const { lang, toggle, t } = useLang()
 
   const handleLogout = () => {
     logout()
     navigate('/login')
   }
 
+  const LangToggle = (
+    <button
+      onClick={toggle}
+      title={t('nav.langSwitchTitle')}
+      className="rounded-full border border-aqua px-3 py-1 text-sm font-medium text-aqua hover:bg-aqua hover:text-navy"
+    >
+      {lang === 'ko' ? t('nav.toggleToEn') : t('nav.toggleToKo')}
+    </button>
+  )
+
   return (
     <div>
       <nav className="flex items-center gap-4 p-4 bg-navy text-white">
-        <Link to="/" className="font-bold hover:text-aqua">MediLaw</Link>
+        <Link to="/" className="font-bold hover:text-aqua">{t('nav.brand')}</Link>
         {isLoggedIn ? (
           <>
-            <Link to="/chat" className="hover:text-aqua">챗봇</Link>
-            <Link to="/dashboard" className="hover:text-aqua">대시보드</Link>
-            <Link to="/ad-review" className="hover:text-aqua">광고검토</Link>
-            <Link to="/checklist" className="hover:text-aqua">체크리스트</Link>
-            <Link to="/law-updates" className="hover:text-aqua">법령 개정</Link>
-            <Link to="/mypage" className="hover:text-aqua">마이페이지</Link>
-            <button onClick={handleLogout} className="ml-auto hover:text-aqua">
-              로그아웃
-            </button>
+            <Link to="/chat" className="hover:text-aqua">{t('nav.chat')}</Link>
+            <Link to="/dashboard" className="hover:text-aqua">{t('nav.dashboard')}</Link>
+            <Link to="/ad-review" className="hover:text-aqua">{t('nav.adReview')}</Link>
+            <Link to="/checklist" className="hover:text-aqua">{t('nav.checklist')}</Link>
+            <Link to="/law-updates" className="hover:text-aqua">{t('nav.lawUpdates')}</Link>
+            <Link to="/mypage" className="hover:text-aqua">{t('nav.mypage')}</Link>
+            <div className="ml-auto flex items-center gap-3">
+              {LangToggle}
+              <button onClick={handleLogout} className="hover:text-aqua">
+                {t('nav.logout')}
+              </button>
+            </div>
           </>
         ) : (
-          <Link to="/login" className="ml-auto hover:text-aqua">로그인</Link>
+          <div className="ml-auto flex items-center gap-3">
+            {LangToggle}
+            <Link to="/login" className="hover:text-aqua">{t('nav.login')}</Link>
+          </div>
         )}
       </nav>
 

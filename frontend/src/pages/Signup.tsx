@@ -1,6 +1,7 @@
 import { useState, useRef, type RefObject } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { signup } from '../api/auth'
+import { useLang } from '../i18n/LanguageContext'
 
 const initial = {
   login_id: '',
@@ -11,28 +12,28 @@ const initial = {
   phone_number: '',
 }
 
-// 칸별 검증 규칙 한 곳에 모으기
+// 칸별 검증 규칙 한 곳에 모으기 (번역키를 반환, 통과 시 빈 문자열)
 function validateField(name: string, form: typeof initial): string {
   switch (name) {
     case 'login_id':
       return !form.login_id.trim()
-        ? '아이디를 입력해주세요.'
+        ? 'signup.errIdRequired'
         : form.login_id.trim().length < 3
-        ? '아이디는 3자 이상이어야 합니다.'
+        ? 'signup.errIdShort'
         : ''
     case 'password':
       return !form.password
-        ? '비밀번호를 입력해주세요.'
+        ? 'signup.errPwRequired'
         : form.password.length < 8
-        ? '비밀번호는 8자 이상 입력해주세요.'
+        ? 'signup.errPwShort'
         : ''
     case 'passwordConfirm':
-      return form.passwordConfirm !== form.password ? '비밀번호가 일치하지 않습니다.' : ''
+      return form.passwordConfirm !== form.password ? 'signup.errPwMismatch' : ''
     case 'name':
-      return !form.name.trim() ? '이름을 입력해주세요.' : ''
+      return !form.name.trim() ? 'signup.errNameRequired' : ''
     case 'email':
       return form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)
-        ? '이메일 형식이 올바르지 않습니다.'
+        ? 'signup.errEmailInvalid'
         : ''
     default:
       return ''
@@ -40,6 +41,7 @@ function validateField(name: string, form: typeof initial): string {
 }
 
 export default function Signup() {
+  const { t } = useLang()
   const [form, setForm] = useState(initial)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [showPw, setShowPw] = useState(false)
@@ -103,16 +105,16 @@ export default function Signup() {
         email: form.email,
         phone_number: form.phone_number,
       })
-      alert('회원가입이 완료되었습니다. 로그인해주세요.')
+      alert(t('signup.done'))
       navigate('/login')
     } catch (err: any) {
       const m = err.response?.data?.message ?? ''
-      const ko = m.includes('login_id')
-        ? '이미 사용 중인 아이디입니다.'
+      const key = m.includes('login_id')
+        ? 'signup.errIdTaken'
         : m.includes('email')
-        ? '이미 사용 중인 이메일입니다.'
-        : '회원가입에 실패했습니다.'
-      setErrors((p) => ({ ...p, form: ko }))
+        ? 'signup.errEmailTaken'
+        : 'signup.errFailed'
+      setErrors((p) => ({ ...p, form: key }))
       console.error('signup error:', err)
     } finally {
       setLoading(false)
@@ -128,13 +130,13 @@ export default function Signup() {
     <div className="min-h-screen flex items-center justify-center bg-[#F7F8FA] px-8 py-12">
       <div className="w-full max-w-sm">
         <h1 className="text-3xl font-bold text-aqua mb-1">MediLaw AI</h1>
-        <h2 className="text-xl font-bold text-navy mb-8">회원가입</h2>
+        <h2 className="text-xl font-bold text-navy mb-8">{t('signup.title')}</h2>
 
         <div className="space-y-4">
           {/* 아이디 */}
           <div>
             <label htmlFor="login_id" className="block text-sm font-medium text-slate-700 mb-1">
-              아이디 *
+              {t('signup.idLabel')}
             </label>
             <input
               id="login_id"
@@ -142,20 +144,20 @@ export default function Signup() {
               value={form.login_id}
               onChange={(e) => update('login_id', e.target.value)}
               onBlur={() => handleBlur('login_id')}
-              placeholder="사용할 아이디"
+              placeholder={t('signup.idPlaceholder')}
               aria-invalid={!!errors.login_id}
               aria-describedby="login_id-error"
               className={inputClass('login_id')}
             />
             {errors.login_id && (
-              <p id="login_id-error" className="mt-1 text-xs text-error">{errors.login_id}</p>
+              <p id="login_id-error" className="mt-1 text-xs text-error">{t(errors.login_id)}</p>
             )}
           </div>
 
           {/* 비밀번호 */}
           <div>
             <label htmlFor="password" className="block text-sm font-medium text-slate-700 mb-1">
-              비밀번호 *
+              {t('signup.pwLabel')}
             </label>
             <div className="relative">
               <input
@@ -165,7 +167,7 @@ export default function Signup() {
                 value={form.password}
                 onChange={(e) => update('password', e.target.value)}
                 onBlur={() => handleBlur('password')}
-                placeholder="비밀번호"
+                placeholder={t('signup.pwPlaceholder')}
                 aria-invalid={!!errors.password}
                 aria-describedby="password-help password-error"
                 className={inputClass('password')}
@@ -175,19 +177,19 @@ export default function Signup() {
                 onClick={() => setShowPw((v) => !v)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-700"
               >
-                {showPw ? '숨김' : '표시'}
+                {showPw ? t('signup.hide') : t('signup.show')}
               </button>
             </div>
-            <p id="password-help" className="mt-1 text-xs text-slate-400">8자 이상 입력해주세요.</p>
+            <p id="password-help" className="mt-1 text-xs text-slate-400">{t('signup.pwHelp')}</p>
             {errors.password && (
-              <p id="password-error" className="mt-1 text-xs text-error">{errors.password}</p>
+              <p id="password-error" className="mt-1 text-xs text-error">{t(errors.password)}</p>
             )}
           </div>
 
           {/* 비밀번호 확인 */}
           <div>
             <label htmlFor="passwordConfirm" className="block text-sm font-medium text-slate-700 mb-1">
-              비밀번호 확인 *
+              {t('signup.pwConfirmLabel')}
             </label>
             <input
               id="passwordConfirm"
@@ -196,20 +198,20 @@ export default function Signup() {
               value={form.passwordConfirm}
               onChange={(e) => update('passwordConfirm', e.target.value)}
               onBlur={() => handleBlur('passwordConfirm')}
-              placeholder="비밀번호 재입력"
+              placeholder={t('signup.pwConfirmPlaceholder')}
               aria-invalid={!!errors.passwordConfirm}
               aria-describedby="passwordConfirm-error"
               className={inputClass('passwordConfirm')}
             />
             {errors.passwordConfirm && (
-              <p id="passwordConfirm-error" className="mt-1 text-xs text-error">{errors.passwordConfirm}</p>
+              <p id="passwordConfirm-error" className="mt-1 text-xs text-error">{t(errors.passwordConfirm)}</p>
             )}
           </div>
 
           {/* 이름 */}
           <div>
             <label htmlFor="name" className="block text-sm font-medium text-slate-700 mb-1">
-              이름 *
+              {t('signup.nameLabel')}
             </label>
             <input
               id="name"
@@ -217,20 +219,20 @@ export default function Signup() {
               value={form.name}
               onChange={(e) => update('name', e.target.value)}
               onBlur={() => handleBlur('name')}
-              placeholder="이름"
+              placeholder={t('signup.namePlaceholder')}
               aria-invalid={!!errors.name}
               aria-describedby="name-error"
               className={inputClass('name')}
             />
             {errors.name && (
-              <p id="name-error" className="mt-1 text-xs text-error">{errors.name}</p>
+              <p id="name-error" className="mt-1 text-xs text-error">{t(errors.name)}</p>
             )}
           </div>
 
           {/* 이메일 (선택) */}
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1">
-              이메일 <span className="text-slate-400 font-normal">(선택)</span>
+              {t('signup.emailLabel')} <span className="text-slate-400 font-normal">{t('signup.emailOptional')}</span>
             </label>
             <input
               id="email"
@@ -239,45 +241,45 @@ export default function Signup() {
               value={form.email}
               onChange={(e) => update('email', e.target.value)}
               onBlur={() => handleBlur('email')}
-              placeholder="you@example.com"
+              placeholder={t('signup.emailPlaceholder')}
               aria-invalid={!!errors.email}
               aria-describedby="email-error"
               className={inputClass('email')}
             />
             {errors.email && (
-              <p id="email-error" className="mt-1 text-xs text-error">{errors.email}</p>
+              <p id="email-error" className="mt-1 text-xs text-error">{t(errors.email)}</p>
             )}
           </div>
 
           {/* 연락처 (선택) */}
           <div>
             <label htmlFor="phone_number" className="block text-sm font-medium text-slate-700 mb-1">
-              연락처 <span className="text-slate-400 font-normal">(선택)</span>
+              {t('signup.phoneLabel')} <span className="text-slate-400 font-normal">{t('signup.emailOptional')}</span>
             </label>
             <input
               id="phone_number"
               value={form.phone_number}
               onChange={(e) => update('phone_number', e.target.value)}
-              placeholder="01012345678"
+              placeholder={t('signup.phonePlaceholder')}
               className="w-full px-4 py-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-aqua focus:border-transparent"
             />
           </div>
 
           {/* 폼 전체 에러 (서버 실패 등) */}
-          {errors.form && <p className="text-sm text-error">{errors.form}</p>}
+          {errors.form && <p className="text-sm text-error">{t(errors.form)}</p>}
 
           <button
             onClick={handleSignup}
             disabled={loading}
             className="w-full py-2.5 bg-navy text-white font-medium rounded-lg hover:bg-aqua hover:text-navy transition-colors disabled:opacity-50"
           >
-            {loading ? '가입 중…' : '회원가입'}
+            {loading ? t('signup.submitting') : t('signup.submit')}
           </button>
         </div>
 
         <p className="mt-6 text-center text-sm text-slate-500">
-          이미 계정이 있으신가요?{' '}
-          <Link to="/login" className="text-brand-blue font-medium hover:underline">로그인</Link>
+          {t('signup.haveAccount')}{' '}
+          <Link to="/login" className="text-brand-blue font-medium hover:underline">{t('signup.loginLink')}</Link>
         </p>
       </div>
     </div>

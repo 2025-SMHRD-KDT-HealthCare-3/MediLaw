@@ -2,6 +2,7 @@
 import { useNavigate } from 'react-router-dom'
 import { getMe, updateMe, logout as logoutApi } from '../api/auth'
 import { useAuthStore } from '../store/authStore'
+import { useLang } from '../i18n/LanguageContext'
 
 interface UserInfo {
   login_id?: string
@@ -12,6 +13,7 @@ interface UserInfo {
 }
 
 export default function MyPage() {
+  const { t } = useLang()
   const [user, setUser] = useState<UserInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(false)
@@ -46,9 +48,9 @@ export default function MyPage() {
       await updateMe(form)
       setUser((prev) => ({ ...prev, ...form }))
       setEditing(false)
-      setMsg('저장되었습니다.')
+      setMsg(t('mypage.saved'))
     } catch (err: any) {
-      setMsg('저장 실패: ' + (err.response?.data?.message ?? err.message))
+      setMsg(t('mypage.saveFailed') + ': ' + (err.response?.data?.message ?? err.message))
     }
   }
 
@@ -65,22 +67,22 @@ export default function MyPage() {
   return (
     <div className="min-h-screen bg-[#F7F8FA] p-8">
       <div className="mx-auto max-w-xl">
-        <h1 className="text-2xl font-bold text-navy mb-1">마이페이지</h1>
-        <p className="text-sm text-slate-500 mb-8">내 계정 정보를 확인하고 수정할 수 있습니다.</p>
+        <h1 className="text-2xl font-bold text-navy mb-1">{t('mypage.title')}</h1>
+        <p className="text-sm text-slate-500 mb-8">{t('mypage.desc')}</p>
 
         {loading ? (
-          <p className="text-sm text-slate-400">불러오는 중…</p>
+          <p className="text-sm text-slate-400">{t('common.loading')}</p>
         ) : (
           <div className="rounded-xl border border-gray-200 bg-white p-6">
             {/* 아이디 (수정 불가) */}
             <div className="mb-4">
-              <label className="block text-xs font-medium text-slate-400 mb-1">아이디</label>
+              <label className="block text-xs font-medium text-slate-400 mb-1">{t('mypage.loginId')}</label>
               <p className="text-sm text-slate-800">{user?.login_id ?? '-'}</p>
             </div>
 
             {/* 이름 */}
             <div className="mb-4">
-              <label className="block text-xs font-medium text-slate-400 mb-1">이름</label>
+              <label className="block text-xs font-medium text-slate-400 mb-1">{t('mypage.name')}</label>
               {editing ? (
                 <input
                   value={form.name}
@@ -94,7 +96,7 @@ export default function MyPage() {
 
             {/* 이메일 */}
             <div className="mb-4">
-              <label className="block text-xs font-medium text-slate-400 mb-1">이메일</label>
+              <label className="block text-xs font-medium text-slate-400 mb-1">{t('mypage.email')}</label>
               {editing ? (
                 <input
                   value={form.email}
@@ -108,7 +110,7 @@ export default function MyPage() {
 
             {/* 연락처 */}
             <div className="mb-6">
-              <label className="block text-xs font-medium text-slate-400 mb-1">연락처</label>
+              <label className="block text-xs font-medium text-slate-400 mb-1">{t('mypage.phone')}</label>
               {editing ? (
                 <input
                   value={form.phone_number}
@@ -128,22 +130,22 @@ export default function MyPage() {
                 <>
                   <button onClick={handleSave}
                     className="rounded-lg bg-navy px-5 py-2 text-sm font-medium text-white hover:bg-navy/90">
-                    저장
+                    {t('mypage.save')}
                   </button>
                   <button onClick={() => setEditing(false)}
                     className="rounded-lg border border-slate-300 px-5 py-2 text-sm text-slate-600 hover:bg-slate-50">
-                    취소
+                    {t('mypage.cancel')}
                   </button>
                 </>
               ) : (
                 <button onClick={() => setEditing(true)}
                   className="rounded-lg bg-navy px-5 py-2 text-sm font-medium text-white hover:bg-navy/90">
-                  정보 수정
+                  {t('mypage.edit')}
                 </button>
               )}
               <button onClick={handleLogout}
                 className="ml-auto rounded-lg border border-slate-300 px-5 py-2 text-sm text-slate-600 hover:bg-slate-50">
-                로그아웃
+                {t('mypage.logout')}
               </button>
             </div>
           </div>

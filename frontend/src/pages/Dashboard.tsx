@@ -1,6 +1,7 @@
 ﻿import { useEffect, useState } from 'react'
 import { getRooms, getAdReviews, deleteRoom, deleteAdCopy } from '../api/chat'
 import RoomDetailModal from '../components/RoomDetailModal'
+import { useLang } from '../i18n/LanguageContext'
 
 interface Room {
   room_id: number
@@ -16,14 +17,15 @@ interface AdReview {
   status: string // 계산된 상태: ok / todo / risk
 }
 
-const ROOM_STYLE: Record<string, { label: string; color: string }> = {
-  ACTIVE: { label: '진행중', color: '#13AAA0' },
-  CLOSED: { label: '종료', color: '#6B7280' },
+// status → 색 + 라벨 번역키 (라벨은 렌더 시 t()로 변환)
+const ROOM_STYLE: Record<string, { labelKey: string; color: string }> = {
+  ACTIVE: { labelKey: 'dashboard.roomActive', color: '#13AAA0' },
+  CLOSED: { labelKey: 'dashboard.roomClosed', color: '#6B7280' },
 }
-const AD_STYLE: Record<string, { label: string; color: string }> = {
-  risk: { label: '위반 소지', color: '#D9534F' },
-  todo: { label: '확인 필요', color: '#E8A33D' },
-  ok: { label: '문제 없음', color: '#13AAA0' },
+const AD_STYLE: Record<string, { labelKey: string; color: string }> = {
+  risk: { labelKey: 'dashboard.adRisk', color: '#D9534F' },
+  todo: { labelKey: 'dashboard.adTodo', color: '#E8A33D' },
+  ok: { labelKey: 'dashboard.adOk', color: '#13AAA0' },
 }
 
 function fmtDate(s?: string) {
@@ -46,6 +48,7 @@ function calcAdStatus(legalBasisStr?: string): string {
 }
 
 export default function Dashboard() {
+  const { t } = useLang()
   const [rooms, setRooms] = useState<Room[]>([])
   const [ads, setAds] = useState<AdReview[]>([])
   const [loading, setLoading] = useState(true)
@@ -78,14 +81,14 @@ export default function Dashboard() {
   // 상담 삭제
   const handleDelete = async (e: React.MouseEvent, room: Room) => {
     e.stopPropagation() // 카드 클릭(모달 열기) 막기
-    if (!window.confirm(`'${room.room_title}' 상담을 삭제할까요?`)) return
+    if (!window.confirm(t('dashboard.confirmDeleteRoom').replace('{title}', room.room_title))) return
     setDeletingId(room.room_id)
     try {
       await deleteRoom(room.room_id)
       setRooms((prev) => prev.filter((r) => r.room_id !== room.room_id))
     } catch (err) {
       console.error('삭제 실패:', err)
-      alert('삭제에 실패했어요. 잠시 후 다시 시도해주세요.')
+      alert(t('dashboard.deleteFailed'))
     } finally {
       setDeletingId(null)
     }
@@ -94,14 +97,14 @@ export default function Dashboard() {
   // 광고문구 검토 이력 삭제
   const handleDeleteAd = async (e: React.MouseEvent, ad: AdReview) => {
     e.stopPropagation()
-    if (!window.confirm('이 광고문구 검토 이력을 삭제할까요?')) return
+    if (!window.confirm(t('dashboard.confirmDeleteAd'))) return
     setDeletingAdId(ad.ai_copy_id)
     try {
       await deleteAdCopy(ad.ai_copy_id)
       setAds((prev) => prev.filter((a) => a.ai_copy_id !== ad.ai_copy_id))
     } catch (err) {
       console.error('광고문구 삭제 실패:', err)
-      alert('삭제에 실패했어요. 잠시 후 다시 시도해주세요.')
+      alert(t('dashboard.deleteFailed'))
     } finally {
       setDeletingAdId(null)
     }
@@ -110,21 +113,23 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-[#F7F8FA] p-8">
       <div className="mx-auto max-w-5xl">
-        <h1 className="text-2xl font-bold text-navy mb-1">대시보드</h1>
+        <h1 className="text-2xl font-bold text-navy mb-1">{t('dashboard.title')}</h1>
         <p className="text-sm text-slate-500 mb-8">
-          상담 현황과 광고문구 검토 이력을 한눈에 확인하세요.
+          {t('dashboard.desc')}
         </p>
 
         {loading ? (
-          <p className="text-sm text-slate-400">불러오는 중…</p>
+          <p className="text-sm text-slate-400">{t('common.loading')}</p>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* 지난 상담 */}
             <section className="rounded-xl border border-gray-200 bg-white p-6">
-              <h2 className="text-lg font-semibold text-navy mb-4">지난 상담</h2>
+              <h2 className="text-lg font-semibold text-navy mb-4">{t('dashboard.pastChats')}</h2>
               <div className="space-y-3">
                 {rooms.map((r) => {
-                  const s = ROOM_STYLE[r.room_status ?? ''] ?? { label: r.room_status ?? '-', color: '#6B7280' }
+                  const s = ROOM_STYLE[r.room_status ?? '']
+                  const roomLabel = s ? t(s.labelKey) : (r.room_status ?? '-')
+                  const roomColor = s?.color ?? '#6B7280'
                   return (
                     <div
                       key={r.room_id}
@@ -137,13 +142,13 @@ export default function Dashboard() {
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
-                          style={{ color: s.color, backgroundColor: `${s.color}1A` }}>
-                          ● {s.label}
+                          style={{ color: roomColor, backgroundColor: `${roomColor}1A` }}>
+                          ● {roomLabel}
                         </span>
                         <button
                           onClick={(e) => handleDelete(e, r)}
                           disabled={deletingId === r.room_id}
-                          title="삭제"
+                          title={t('dashboard.deleteTitle')}
                           className="shrink-0 rounded-md px-2 py-1 text-sm text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 disabled:opacity-50"
                         >
                           ✕
@@ -152,13 +157,13 @@ export default function Dashboard() {
                     </div>
                   )
                 })}
-                {rooms.length === 0 && <p className="text-sm text-slate-400">상담 내역이 없습니다.</p>}
+                {rooms.length === 0 && <p className="text-sm text-slate-400">{t('dashboard.noChats')}</p>}
               </div>
             </section>
 
             {/* 광고문구 검토 이력 */}
             <section className="rounded-xl border border-gray-200 bg-white p-6">
-              <h2 className="text-lg font-semibold text-navy mb-4">광고문구 검토 이력</h2>
+              <h2 className="text-lg font-semibold text-navy mb-4">{t('dashboard.adHistory')}</h2>
               <div className="space-y-3">
                 {ads.map((a) => {
                   const s = AD_STYLE[a.status]
@@ -174,12 +179,12 @@ export default function Dashboard() {
                       <div className="flex items-center gap-2">
                         <span className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
                           style={{ color: s.color, backgroundColor: `${s.color}1A` }}>
-                          ● {s.label}
+                          ● {t(s.labelKey)}
                         </span>
                         <button
                           onClick={(e) => handleDeleteAd(e, a)}
                           disabled={deletingAdId === a.ai_copy_id}
-                          title="삭제"
+                          title={t('dashboard.deleteTitle')}
                           className="shrink-0 rounded-md px-2 py-1 text-sm text-slate-300 opacity-0 transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 disabled:opacity-50"
                         >
                           ✕
@@ -188,7 +193,7 @@ export default function Dashboard() {
                     </div>
                   )
                 })}
-                {ads.length === 0 && <p className="text-sm text-slate-400">검토 이력이 없습니다.</p>}
+                {ads.length === 0 && <p className="text-sm text-slate-400">{t('dashboard.noAds')}</p>}
               </div>
             </section>
           </div>

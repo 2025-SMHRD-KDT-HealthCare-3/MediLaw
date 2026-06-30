@@ -1,6 +1,7 @@
 // src/components/RoomDetailModal.tsx
 import { useEffect, useState } from 'react';
 import { getChats } from '../api/chat';
+import { useLang } from '../i18n/LanguageContext';
 
 type Chat = {
   chat_id: number;
@@ -17,6 +18,7 @@ type Props = {
 };
 
 export default function RoomDetailModal({ roomId, roomTitle, roomDate, onClose }: Props) {
+  const { lang, t } = useLang();
   const [chats, setChats] = useState<Chat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -31,7 +33,7 @@ export default function RoomDetailModal({ roomId, roomTitle, roomDate, onClose }
         setChats(res?.data ?? []);
       })
       .catch(() => {
-        if (alive) setError('대화 내역을 불러오지 못했어요.');
+        if (alive) setError(t('modal.loadFailed'));
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -52,7 +54,7 @@ export default function RoomDetailModal({ roomId, roomTitle, roomDate, onClose }
 
   const fmtTime = (iso: string) => {
     try {
-      return new Date(iso).toLocaleString('ko-KR', {
+      return new Date(iso).toLocaleString(lang === 'en' ? 'en-US' : 'ko-KR', {
         month: 'long',
         day: 'numeric',
         hour: '2-digit',
@@ -125,7 +127,7 @@ export default function RoomDetailModal({ roomId, roomTitle, roomDate, onClose }
         <div style={{ padding: '20px 22px', overflowY: 'auto', flex: 1, background: '#F7F8FA' }}>
           {loading && (
             <div style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>
-              불러오는 중...
+              {t('modal.loading')}
             </div>
           )}
           {error && (
@@ -133,7 +135,7 @@ export default function RoomDetailModal({ roomId, roomTitle, roomDate, onClose }
           )}
           {!loading && !error && chats.length === 0 && (
             <div style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>
-              아직 대화 내역이 없어요.
+              {t('modal.empty')}
             </div>
           )}
 
