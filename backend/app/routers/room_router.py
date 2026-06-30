@@ -30,7 +30,12 @@ def list_rooms(
     current_user: User = Depends(get_current_user),
 ):
     rooms = room_service.list_rooms(db, current_user, skip=skip, limit=limit)
-    return success_response(jsonable_encoder([RoomResponse.model_validate(room) for room in rooms]))
+    items = []
+    for room in rooms:
+        data = jsonable_encoder(RoomResponse.model_validate(room))
+        data["preview"] = getattr(room, "preview", None)  # 사이드바 제목용 첫 질문 미리보기
+        items.append(data)
+    return success_response(items)
 
 
 @router.get("/{room_id}")

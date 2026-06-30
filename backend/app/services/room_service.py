@@ -1,8 +1,10 @@
 import logging
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestError, ForbiddenError, NotFoundError
+from app.models.chat import Chat
 from app.models.user import User
 from app.repositories import room_repository
 from app.schemas.room_schema import RoomCreate, RoomUpdate
@@ -48,7 +50,27 @@ def ensure_room_open(db: Session, room_id: int, current_user: User):
 def list_rooms(db: Session, current_user: User, skip: int = 0, limit: int = 100):
     # TODO: admins may use richer filters for all rooms in a dashboard.
     user_id = None if current_user.role == "ADMIN" else current_user.user_id
-    return room_repository.get_list(db, user_id=user_id, skip=skip, limit=limit)
+    rooms = room_repository.get_list(db, user_id=user_id, skip=skip, limit=limit)
+    # 사이드바 제목용 미리보기(각 방의 첫 사용자 질문)를 한 번의 쿼리로 채운다.
+    # (프론트가 방마다 호출하면 방 많을 때 rate limit에 걸리므로 여기서 일괄 처리.)
+    room_ids = [r.room_id for r in rooms]
+    preview_by_room: dict[int, str] = {}
+    if room_ids:
+        first_ids = (
+            select(func.min(Chat.chat_id))
+            .where(Chat.room_id.in_(room_ids), Chat.speaker_type == "USER")
+            .group_by(Chat.room_id)
+            .scalar_subquery()
+        )
+        for rid, text in db.execute(
+            select(Chat.room_id, Chat.chat_text).where(Chat.chat_id.in_(first_ids))
+        ).all():
+            if text:
+                preview_by_room[rid] = text.strip()[:60]
+    for r in rooms:
+        # ORM 인스턴스에 임시 속성으로 부착 → 라우터에서 응답에 포함
+        r.preview = preview_by_room.get(r.room_id)
+    return rooms
 
 
 def leave_room(db: Session, room_id: int, current_user: User):
