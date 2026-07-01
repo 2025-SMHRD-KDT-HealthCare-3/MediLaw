@@ -58,8 +58,10 @@ const sameSiteEnv = (name: string, fallback: SameSiteValue): SameSiteValue => {
 const ACCESS_TOKEN_EXPIRE_MINUTES = positiveNumberEnv('ACCESS_TOKEN_EXPIRE_MINUTES', 30)
 const SESSION_COOKIE_MAX_AGE_MS = ACCESS_TOKEN_EXPIRE_MINUTES * 60_000
 const LOGIN_TIMEOUT_MS = positiveNumberEnv('LOGIN_TIMEOUT_MS', 15_000)
-const PRODUCT_PROXY_TIMEOUT_MS = positiveNumberEnv('PRODUCT_PROXY_TIMEOUT_MS', 190_000)
-const RAG_PROXY_TIMEOUT_MS = positiveNumberEnv('RAG_PROXY_TIMEOUT_MS', 190_000)
+// product 가 HMS 문서검토를 최대 300s 기다리므로(hms_client.DOCUMENT_TIMEOUT), node 는 그보다 커야
+// 응답을 끝까지 받아온다. 안 그러면 node 가 먼저 끊어 504가 난다.
+const PRODUCT_PROXY_TIMEOUT_MS = positiveNumberEnv('PRODUCT_PROXY_TIMEOUT_MS', 330_000)
+const RAG_PROXY_TIMEOUT_MS = positiveNumberEnv('RAG_PROXY_TIMEOUT_MS', 330_000)
 const FRONTEND_ORIGINS = csvEnv('FRONTEND_ORIGIN', FRONTEND_ORIGIN)
 const SESSION_COOKIE_SAME_SITE = sameSiteEnv('SESSION_COOKIE_SAME_SITE', 'lax')
 const SESSION_COOKIE_SECURE = booleanEnv(
@@ -309,7 +311,10 @@ app.use(
 )
 
 app.use('/api/rag', (req, res, next) => {
-  if (['/chat', '/chat/stream'].includes(req.path)) {
+  // 한/영 챗봇은 저장(이력·근거·검증)을 위해 product API를 거쳐야 한다.
+  // 영어판(/chat/en, /chat/en/stream)도 동일하게 직통 차단 → product의 ai-answer(lang=en) 사용.
+  // (검토·체크리스트 등 무상태 기능은 /api/rag 직통 허용)
+  if (['/chat', '/chat/stream', '/chat/en', '/chat/en/stream'].includes(req.path)) {
     res.status(409).json(
       errorPayload(
         '챗봇 요청은 저장을 위해 product API를 통해 호출해야 합니다.',

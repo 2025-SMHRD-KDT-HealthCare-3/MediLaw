@@ -1,6 +1,11 @@
-import { useState, type CSSProperties } from 'react'
-import { mockChecklist } from '../mocks/mockChecklist'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { getRooms } from '../api/chat'
+import { getRoomSummaries, parseSummary, type ChecklistView } from '../api/checklistApi'
+import { useLang } from '../i18n/LanguageContext'
 import type { ChecklistItem, ChecklistStatus } from '../types/checklist'
+import LoadingWait from '../components/LoadingWait'
+import { friendlyError } from '../utils/apiError'
 
 const NAVY = '#14304A'
 const SUBBLUE = '#4A90D9'
@@ -9,51 +14,141 @@ const TEAL = '#13AAA0'   // confirmed
 const AMBER = '#E8A33D'  // warning
 const RED = '#D9534F'    // error
 
-// status → 표시 라벨 + 색
-const statusMeta: Record<ChecklistStatus, { label: string; color: string }> = {
-  ok:   { label: '확인 완료', color: TEAL },
-  todo: { label: '확인 필요', color: AMBER },
-  risk: { label: '위험',      color: RED },
-  na:   { label: '해당 없음', color: '#94A3B8' },
+// status → 색 + 라벨 번역키 (라벨은 렌더 시 t()로 변환)
+const statusMeta: Record<ChecklistStatus, { labelKey: string; color: string }> = {
+  ok:   { labelKey: 'checklist.statusOk',   color: TEAL },
+  todo: { labelKey: 'checklist.statusTodo', color: AMBER },
+  risk: { labelKey: 'checklist.statusRisk', color: RED },
+  na:   { labelKey: 'checklist.statusNa',   color: '#94A3B8' },
 }
 
 export default function Checklist() {
-  // 백엔드 500 고쳐지면 generateChecklist(history) 결과로 교체
-  const [data] = useState(mockChecklist)
+  const { t } = useLang()
+  const [searchParams] = useSearchParams()
+  // 광고검토 등에서 ?roomId=로 들어오면 그 방의 저장본을 보여준다(없으면 최신 방).
+  const roomIdParam = searchParams.get('roomId')
+  const [data, setData] = useState<ChecklistView | null>(null)
+  const [loading, setLoading] = useState(true) // 진입 시 DB 조회 (이 페이지는 조회 전용 — 생성 안 함)
+  const [error, setError] = useState('')
   const [checked, setChecked] = useState<Record<string, boolean>>({})
+
+  // 진입 시: 최신 방의 '저장된' 체크리스트를 DB에서 불러온다.
+  // (예전처럼 매번 RAG로 새로 생성하지 않는다. 저장된 게 없으면 생성 버튼만 보여준다.)
+  useEffect(() => {
+    let alive = true
+    const load = async () => {
+      try {
+        setLoading(true)
+        setError('')
+
+        let targetRoomId: number
+        if (roomIdParam) {
+          targetRoomId = Number(roomIdParam)
+        } else {
+          const roomsRes = await getRooms()
+          const rooms = roomsRes?.data ?? []
+          if (rooms.length === 0) {
+            if (alive) setError(t('checklist.noRoom'))
+            return
+          }
+          targetRoomId = rooms[0].room_id
+        }
+        const summaries = await getRoomSummaries(targetRoomId)
+        if (alive) setData(summaries.length > 0 ? parseSummary(summaries[0]) : null)
+      } catch (e) {
+        console.error('체크리스트 조회 실패:', e)
+        if (alive) setError(friendlyError(e, t, 'checklist.loadFailed'))
+      } finally {
+        if (alive) setLoading(false)
+      }
+    }
+
+    load()
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomIdParam])
 
   const toggle = (id: string) => setChecked((c) => ({ ...c, [id]: !c[id] }))
 
-  const s = data.checklist_summary
+  // 공통 헤더 (제목 줄)
+  const Header = () => (
+    <div className="mb-6 flex items-center justify-between">
+      <h1 className="text-2xl font-bold" style={{ color: NAVY }}>{t('checklist.title')}</h1>
+    </div>
+  )
+
+  // 진입 로딩 (DB 조회 중)
+  if (loading) {
+    return (
+      <div className="min-h-[calc(100vh-60px)] bg-[#F7F8FA] px-6 py-8">
+        <div className="mx-auto max-w-2xl">
+          <Header />
+          <LoadingWait compact title={t('checklist.loadingSaved')} />
+        </div>
+      </div>
+    )
+  }
+
+  // 에러 상태
+  if (error) {
+    return (
+      <div className="min-h-[calc(100vh-60px)] bg-[#F7F8FA] px-6 py-8">
+        <div className="mx-auto max-w-2xl">
+          <Header />
+          <div className="rounded-xl border border-slate-200 bg-white p-8 text-center">
+            <p className="text-sm text-slate-500">{error}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // 저장된 체크리스트가 없음 → 여기선 생성하지 않고(방문마다 비용 X) 광고검토에서 만들도록 안내만
+  if (!data) {
+    return (
+      <div className="min-h-[calc(100vh-60px)] bg-[#F7F8FA] px-6 py-8">
+        <div className="mx-auto max-w-2xl">
+          <Header />
+          <div className="rounded-xl border border-slate-200 bg-white p-10 text-center">
+            <p className="text-sm text-slate-500">{t('checklist.empty')}</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const s = data.summary
   const doneCount = data.checklist.filter((i) => checked[i.id] || i.status === 'ok').length
 
   return (
-    <div className="min-h-[calc(100vh-60px)] bg-slate-50 px-6 py-8">
+    <div className="min-h-[calc(100vh-60px)] bg-[#F7F8FA] px-6 py-8">
       <div className="mx-auto max-w-2xl">
         {/* 헤더 */}
         <div className="mb-1 flex items-center justify-between">
-          <h1 className="text-2xl font-bold" style={{ color: NAVY }}>법령 준수 체크리스트</h1>
-          <span className="text-sm text-slate-400">대화 기반 자동 생성</span>
+          <h1 className="text-2xl font-bold" style={{ color: NAVY }}>{t('checklist.title')}</h1>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-slate-400">{t('checklist.autoGen')}</span>
+          </div>
         </div>
-        <p className="mb-6 text-sm text-slate-500">
-          상담 내용을 분석해 확인이 필요한 법적 의무를 점검 항목으로 정리했습니다.
-        </p>
+        <p className="mb-6 text-sm text-slate-500">{t('checklist.desc')}</p>
 
         {/* 진행 요약 */}
         <div className="mb-6 flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4">
           <div className="flex-1">
             <div className="flex items-center justify-between text-sm">
-              <span className="font-medium" style={{ color: NAVY }}>점검 진행</span>
+              <span className="font-medium" style={{ color: NAVY }}>{t('checklist.progress')}</span>
               <span className="text-slate-500">{doneCount} / {s.total}</span>
             </div>
             <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-slate-100">
-              <div className="h-full rounded-full" style={{ width: `${(doneCount / s.total) * 100}%`, backgroundColor: TEAL }} />
+              <div className="h-full rounded-full" style={{ width: `${s.total ? (doneCount / s.total) * 100 : 0}%`, backgroundColor: TEAL }} />
             </div>
           </div>
           <div className="flex gap-3 text-center text-xs">
-            <div><div className="text-lg font-bold" style={{ color: RED }}>{s.risk}</div><div className="text-slate-400">위험</div></div>
-            <div><div className="text-lg font-bold" style={{ color: AMBER }}>{s.todo}</div><div className="text-slate-400">확인필요</div></div>
-            <div><div className="text-lg font-bold" style={{ color: TEAL }}>{s.ok}</div><div className="text-slate-400">완료</div></div>
+            <div><div className="text-lg font-bold" style={{ color: RED }}>{s.risk}</div><div className="text-slate-400">{t('checklist.riskShort')}</div></div>
+            <div><div className="text-lg font-bold" style={{ color: AMBER }}>{s.todo}</div><div className="text-slate-400">{t('checklist.todoShort')}</div></div>
+            <div><div className="text-lg font-bold" style={{ color: TEAL }}>{s.ok}</div><div className="text-slate-400">{t('checklist.doneShort')}</div></div>
           </div>
         </div>
 
@@ -78,7 +173,7 @@ export default function Checklist() {
                       </span>
                       <span className="rounded-full px-2 py-0.5 text-xs font-medium"
                             style={{ color: meta.color, backgroundColor: `${meta.color}1a` }}>
-                        {meta.label}
+                        {t(meta.labelKey)}
                       </span>
                     </div>
                     <p className="mt-1 text-sm text-slate-600">{item.reason}</p>

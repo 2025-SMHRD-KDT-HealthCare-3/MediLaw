@@ -1,28 +1,18 @@
 // src/pages/Home.tsx
 import { useNavigate } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
-
-const FEATURES = [
-  {
-    icon: '🔍',
-    title: 'Citation Verification',
-    desc: 'AI 답변의 근거 법령을 자동 검증하고, 확인·주의·오류 상태를 한눈에 보여줍니다.',
-  },
-  {
-    icon: '⚠️',
-    title: '위험 표현 감지',
-    desc: '광고문구·문서 속 의료법 위반 소지 표현을 사전에 찾아내고 대안을 제시합니다.',
-  },
-  {
-    icon: '📋',
-    title: '컴플라이언스 리포트',
-    desc: '검토 결과를 법령 기준일과 함께 기록해, 감사 추적이 가능한 문서로 남깁니다.',
-  },
-]
+import { useLang } from '../i18n/LanguageContext'
 
 export default function Home() {
   const navigate = useNavigate()
   const isLoggedIn = useAuthStore((s) => s.isLoggedIn)
+  const { t } = useLang()
+
+  const FEATURES = [
+    { icon: '🔍', title: t('home.feature1Title'), desc: t('home.feature1Desc') },
+    { icon: '⚠️', title: t('home.feature2Title'), desc: t('home.feature2Desc') },
+    { icon: '📋', title: t('home.feature3Title'), desc: t('home.feature3Desc') },
+  ]
 
   const handleStart = () => {
     navigate(isLoggedIn ? '/chat' : '/login')
@@ -52,11 +42,11 @@ export default function Home() {
               marginBottom: 24,
             }}
           >
-            의료법 컴플라이언스 AI
+            {t('home.badge')}
           </div>
           <h1 style={{ fontSize: 40, fontWeight: 800, lineHeight: 1.25, margin: 0 }}>
-            답이 아니라 <span style={{ color: '#22C9DB' }}>상태</span>를<br />
-            관리하는 도구
+            {t('home.heroLine1')} <span style={{ color: '#22C9DB' }}>{t('home.heroHighlight')}</span>{t('home.heroLine2')}<br />
+            {t('home.heroLine3')}
           </h1>
           <p
             style={{
@@ -66,9 +56,9 @@ export default function Home() {
               marginTop: 20,
             }}
           >
-            의료 서비스 운영자를 위한 법률 질의응답과 위험 표현 검토.
+            {t('home.heroDesc1')}
             <br />
-            근거를 검증하고, 컴플라이언스를 기록으로 남깁니다.
+            {t('home.heroDesc2')}
           </p>
           <button
             onClick={handleStart}
@@ -84,7 +74,7 @@ export default function Home() {
               cursor: 'pointer',
             }}
           >
-            {isLoggedIn ? '바로 시작하기 →' : '로그인하고 시작하기 →'}
+            {isLoggedIn ? t('home.ctaLoggedIn') : t('home.ctaLoggedOut')}
           </button>
         </div>
       </section>
@@ -100,10 +90,10 @@ export default function Home() {
             marginBottom: 8,
           }}
         >
-          핵심 기능
+          {t('home.featuresTitle')}
         </h2>
         <p style={{ textAlign: 'center', color: '#64748B', fontSize: 14, marginBottom: 40 }}>
-          ChatGPT와 다른, 의료법에 특화된 세 가지
+          {t('home.featuresSub')}
         </p>
         <div
           style={{

@@ -7,9 +7,13 @@ export async function createRoom(room_title: string, room_desc = '') {
   return res.data; // { success, message, data: {...} }
 }
 
-// AI 답변 요청 (질문 보내면 질문+답변+근거+검증이 같이 옴)
-export async function askAi(roomId: number | string, question: string) {
-  const res = await api.post(`/rooms/${roomId}/ai-answer`, { question });
+// ✅ [수정] 중복된 askAi 제거 및 하나로 통합 (기본값 lang = 'ko')
+export async function askAi(
+  roomId: number | string,
+  question: string,
+  lang: 'ko' | 'en' = 'ko',
+) {
+  const res = await api.post(`/rooms/${roomId}/ai-answer`, { question, lang });
   return res.data;
 }
 
@@ -31,11 +35,21 @@ export async function getAdReviews() {
   return res.data;
 }
 
-// 광고문구 검토 요청 (텍스트 + PDF 파일 지원)
-// 파일이 있으면 multipart/form-data로 /ai-ad-copies/ad-review 에 전송
-export async function reviewAdCopy(text: string, file?: File | null, roomId?: number) {
+// 광고문구 검토 단건 조회(이력에서 과거 검토 불러오기)
+export async function getAdCopy(aiCopyId: number | string) {
+  const res = await api.get(`/ai-ad-copies/${aiCopyId}`);
+  return res.data;
+}
+
+// 광고문구 검토 요청 (텍스트 + PDF 파일 지원, 언어 선택)
+export async function reviewAdCopy(
+  text: string,
+  file?: File | null,
+  inputLanguage: 'ko' | 'en' = 'ko',
+  roomId?: number,
+) {
   const form = new FormData();
-  form.append('input_language', 'ko');
+  form.append('input_language', inputLanguage); // 'ko' | 'en'
   if (text.trim()) form.append('text', text.trim());
   if (file) form.append('file', file); // 필드명 'file'
   if (roomId != null) form.append('room_id', String(roomId));
