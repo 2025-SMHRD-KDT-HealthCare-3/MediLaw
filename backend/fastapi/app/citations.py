@@ -84,6 +84,31 @@ def _compact(date_str: str) -> str:
     return re.sub(r"\D", "", date_str or "")
 
 
+def _fmt_article_no(no: str) -> str:
+    """article_no('56' / '56의2' / '56-2') → 표기 '제56조' / '제56조의2'."""
+    n = (no or "").replace("-", "의")
+    if "의" in n:
+        base, branch = n.split("의", 1)
+        return f"제{base}조의{branch}"
+    return f"제{n}조"
+
+
+# 표시용 법령 라벨 정리: 답변 본문 파싱 시 앞 문장조각이 법령명에 붙어 잡히므로
+# ("사건에서는 구 약사법 제23조") 표시에는 '법령명 제N조'만 남긴다.
+_LAW_LABEL_RE = re.compile(
+    r"([가-힣]{1,20}(?:법률|법|령|규칙|고시|예규|훈령|지침|조례))\s*"
+    r"(제\s*\d+\s*조(?:\s*의\s*\d+)?(?:\s*제\s*\d+\s*항)?)"
+)
+
+
+def clean_law_label(raw: str) -> str:
+    m = _LAW_LABEL_RE.search(raw or "")
+    if not m:
+        return (raw or "").strip()
+    article = re.sub(r"\s+", "", m.group(2))
+    return f"{m.group(1)} {article}"
+
+
 # ── 내용 일치(content faithfulness) 검증 — 별도 레이어 ──────────────────────
 # 인용 주변 '주장 문장' ↔ 실제 조문/판례 본문을 임베딩 코사인 유사도로 비교.
 # 검색 인덱스(app.rag, small/512·캐시)와 독립적으로 내용검사 전용 임베딩
@@ -301,11 +326,14 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
                    paragraph_no: int | None = None, claim: str | None = None) -> VerifyResult:
     s = _match_statute(law_name)
     if not s:
-        score, status = _grade(False, None, None)
+        # DB에 없는 법령: '환각'으로 단정(오류/0점)하지 않는다 — 실재하나 코퍼스(4개 법)
+        # 밖일 수 있어 구조적으로 검증이 불가능하다. '주의'로 표시해, 코퍼스 밖 인용 한 건이
+        # 전체 답변 신뢰도를 0으로 끌어내리는 것을 막는다(코퍼스 밖 인용은 경고줄로 별도 고지).
+        clean = clean_law_label(raw)
         return VerifyResult(
             raw=raw, type="statute", exists=False, verified=False,
-            trust_score=score, status=status,
-            note=f"'{law_name.strip()}' 법령을 DB에서 찾을 수 없음",
+            trust_score=50, status="주의", matched_label=clean,
+            note=f"'{clean}'은(는) 확인된 코퍼스(4개 법) 밖이라 검증 불가",
         )
 
     clause_accurate = None
@@ -325,7 +353,7 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
         clause_accurate = art is not None
         if art:
             article_content = art["content"]
-        matched_label = f"{s['name']} 제{article_no}조"
+        matched_label = f"{s['name']} {_fmt_article_no(article_no)}"
         if art and art["article_title"]:
             matched_label += f"({art['article_title']})"
         # 항(項) 검증: 조문 본문(content)에 해당 항이 실제로 존재하는지 확인.
@@ -357,7 +385,7 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
     if paragraph_missing:
         notes.append(f"제{paragraph_no}항이 해당 조문에 존재하지 않음")
     elif clause_accurate is False:
-        notes.append(f"제{article_no}조가 해당 법령에 존재하지 않음")
+        notes.append(f"{_fmt_article_no(article_no)}가 해당 법령에 존재하지 않음")
     if valid_as_of is False:
         notes.append(f"{as_of} 시점에 미발효(발효일 {s['effective_from']})")
     score, status = _grade(True, clause_accurate, valid_as_of, s["trust_grade"])

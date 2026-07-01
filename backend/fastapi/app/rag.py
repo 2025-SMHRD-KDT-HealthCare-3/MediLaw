@@ -32,10 +32,16 @@ _ARTNO_RE = re.compile(r"\d+(?:의\d+)?")
 
 
 def fmt_article_label(law_name: str, article_no: str, article_title: str = "") -> str:
-    """행정규칙('제9조')·법령('57') 혼재 article_no를 '법령 제N조(제목)'로 정규화."""
+    """행정규칙('제9조')·법령('57')·가지조문('28의5') 혼재 article_no를
+    '법령 제N조(제목)' / '법령 제N조의M(제목)'로 정규화."""
     m = _ARTNO_RE.search(article_no or "")
     no = m.group(0) if m else (article_no or "")
-    label = f"{law_name} 제{no}조"
+    if "의" in no:
+        base, branch = no.split("의", 1)
+        art = f"제{base}조의{branch}"
+    else:
+        art = f"제{no}조"
+    label = f"{law_name} {art}"
     title = (article_title or "").strip()
     if title:
         label += f"({title})"

@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 
 from app import domain_router, llm
 from app.auth import require_api_key
-from app.citations import extract_and_verify, summarize
+from app.citations import clean_law_label, extract_and_verify, summarize
 from app.english import detect_lang, english_article
 from app.rag import hybrid_search
 from app.schemas import (
@@ -191,14 +191,16 @@ def _offcorpus_note(cc: VerifyResponse, lang: str) -> str:
 
     LLM이 근거 밖 법령·판례를 흘려 쓰면 Citation Firewall이 exists=False로 잡는다.
     본문은 그대로 두고, 검증 안 된 인용을 끝에 명시해 사용자가 오인하지 않게 한다.
+    라벨은 citations.clean_law_label 로 앞 문장조각을 떼어 '법령명 제N조'만 보인다.
     """
     seen: set[str] = set()
     labels: list[str] = []
     for r in cc.output:
-        raw = (r.raw or "").strip()
-        if not r.exists and raw and raw not in seen:
-            seen.add(raw)
-            labels.append(raw)
+        if not r.exists and (r.raw or "").strip():
+            label = clean_law_label(r.raw)
+            if label and label not in seen:
+                seen.add(label)
+                labels.append(label)
     if not labels:
         return ""
     joined = ", ".join(labels)
