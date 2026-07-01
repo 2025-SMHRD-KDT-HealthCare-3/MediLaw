@@ -47,6 +47,24 @@ RAG_POOL = int(os.environ.get("RAG_POOL", "100"))
 # 조문명 다양성 캡: 같은 조문명 statute 히트를 결과에 최대 N개까지만(0=비활성).
 # 동일 제목 행정규칙 다수가 핵심 법령을 밀어내지 않게 슬롯을 제한한다.
 STATUTE_TITLE_CAP = int(os.environ.get("STATUTE_TITLE_CAP", "2"))
+# 재랭킹 감점: 지역·특정기관용 자치법규(조례·의회규칙)와 개별 기관 내부규정(훈령·예규·
+# 지침, 예: 국립OO병원 규정·국방 환자관리 훈령)은 전국 의료·광고 질의에 거의 무관한데도
+# FTS 키워드 매칭으로 상위에 끼어드는 노이즈다(실측: 근거 상위 8개를 오염시키고 실재 않는
+# 조문 인용으로 ERROR까지 유발). 배제(제거)가 아니라 RRF 점수만 낮춰 관련 법령·가이드라인
+# 아래로 내린다(폴백으로는 여전히 남음). 1.0이면 비활성.
+# 고시는 복지부·식약처 고시 등 진짜 근거가 섞여 있어 기본 대상에서 제외한다.
+STATUTE_PENALTY = float(os.environ.get("STATUTE_PENALTY", "0.4"))
+STATUTE_PENALTY_KINDS = frozenset(
+    k.strip()
+    for k in os.environ.get("STATUTE_PENALTY_KINDS", "조례,의회규칙,훈령,예규,지침").split(",")
+    if k.strip()
+)
+# 코퍼스 하드필터: 법령 검색 결과를 핵심 법령(trust_grade='법령' = 4대법+시행령/규칙)으로
+# 제한한다. 조례·고시·훈령·예규·지침·규칙 등 admrul로 딸려온 무관 자치법규·행정규칙
+# 3천여 건을 근거에서 완전히 배제(감점보다 근본적). 판례·가이드라인·해석례(비-statute
+# 소스)는 영향 없음 → '4개 법 + 판례·가이드라인·해석례' 설계와 정합. 0으로 끄면 전체 검색.
+STATUTE_CORE_ONLY = os.environ.get("STATUTE_CORE_ONLY", "1") == "1"
+CORE_TRUST_GRADE = "법령"
 
 # 내용 일치(content faithfulness) 검증 — 인용 주변 '주장 문장' ↔ 실제 조문/판례 본문을
 # 임베딩 코사인 유사도로 비교해 의미가 다른 인용을 탐지하는 별도 레이어.

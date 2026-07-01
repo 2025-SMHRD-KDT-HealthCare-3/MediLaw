@@ -11,6 +11,7 @@ from collections import OrderedDict
 from functools import lru_cache
 
 from app.config import (
+    CORE_TRUST_GRADE,
     DEFAULT_TOP_K,
     EMBED_DIM,
     EMBED_MODEL,
@@ -18,6 +19,9 @@ from app.config import (
     RAG_POOL,
     RRF_K,
     STATUTE_BOOST,
+    STATUTE_CORE_ONLY,
+    STATUTE_PENALTY,
+    STATUTE_PENALTY_KINDS,
     STATUTE_TITLE_CAP,
 )
 from app.db import db, has_embeddings, vec_loaded
@@ -385,23 +389,33 @@ def hybrid_search(
         for rank, key in enumerate(ranklist):
             scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank + 1)
 
-    # 재랭킹: 핵심 법령(trust_grade='법령')을 제목 유사 행정규칙 위로 끌어올린다.
-    # statute 키의 sid는 article id → articles JOIN statutes 로 핵심 법령 여부 1회 조회.
-    if STATUTE_BOOST != 1.0:
+    # 재랭킹: 핵심 법령(trust_grade='법령')을 제목 유사 행정규칙 위로 끌어올리고(가산),
+    # 지역·특정기관용 자치법규(조례·의회규칙)는 무관 노이즈이므로 점수를 낮춘다(감점).
+    # statute 키의 sid는 article id → articles JOIN statutes 로 등급·종류 1회 조회.
+    if STATUTE_BOOST != 1.0 or (STATUTE_PENALTY != 1.0 and STATUTE_PENALTY_KINDS):
         art_ids = [sid for (st, sid) in scores if st == "statute"]
         if art_ids:
             ph = ",".join("?" * len(art_ids))
-            core = {
-                r["id"]
+            meta = {
+                r["id"]: (r["trust_grade"], r["kind"])
                 for r in db().execute(
-                    f"""SELECT a.id FROM articles a JOIN statutes s ON s.id = a.statute_id
-                        WHERE s.trust_grade = '법령' AND a.id IN ({ph})""",
+                    f"""SELECT a.id, s.trust_grade, s.kind
+                        FROM articles a JOIN statutes s ON s.id = a.statute_id
+                        WHERE a.id IN ({ph})""",
                     art_ids,
                 )
             }
             for key in scores:
-                if key[0] == "statute" and key[1] in core:
+                if key[0] != "statute":
+                    continue
+                m = meta.get(key[1])
+                if not m:
+                    continue
+                trust_grade, kind = m
+                if trust_grade == "법령":
                     scores[key] *= STATUTE_BOOST
+                elif kind in STATUTE_PENALTY_KINDS:
+                    scores[key] *= STATUTE_PENALTY
 
     ordered = sorted(scores.items(), key=lambda x: -x[1])
 
@@ -419,6 +433,10 @@ def hybrid_search(
         else:  # interpretation / decision / guideline
             hit = _doc_hit(sid, score, snip)
         if not hit:
+            continue
+        # 코퍼스 하드필터: statute 근거는 핵심 법령(4개 법+시행령/규칙)만 — 조례·행정규칙 배제.
+        # 판례·가이드라인·해석례(case/doc)는 그대로 유지.
+        if STATUTE_CORE_ONLY and stype == "statute" and hit.trust_grade != CORE_TRUST_GRADE:
             continue
         if as_of_c and hit.effective_from and hit.effective_from > as_of_c:
             continue  # 시점 필터: as_of 이후 발효/선고 자료 제외

@@ -64,6 +64,21 @@ _STATUTE_RE = re.compile(
 # 판례 사건번호: 2010도1234, 84도723, 2015두5184, 2018헌마123 ...
 _CASE_RE = re.compile(r"\b(\d{2,4}\s*[가-힣]{1,3}\s*\d+)\b")
 
+# 이름 없이 '법/시행규칙/조례…' 같은 일반 접미어 토큰만으로 이뤄진 지칭.
+# 앞 문장에서 언급된 법을 "법 제N조"처럼 익명으로 가리키거나, _STATUTE_RE 가 답변
+# 본문에서 법령명 경계를 못 잡아 앞 문장조각까지 캡처하면(예: "외국인환자를 유치할
+# 목적으로 법", "조 및 같은 법 시행규칙") 마지막 토큰이 이런 일반 접미어가 된다.
+# 실제 법령명은 마지막 토큰에 이름부가 남는다(약사법·보호법·의료법…).
+_GENERIC_LAW_TOKENS = frozenset(
+    ["법", "법률", "령", "규칙", "시행령", "시행규칙", "고시", "예규", "훈령", "지침", "조례"]
+)
+
+
+def _is_generic_law_ref(law_name: str) -> bool:
+    """법령명 없이 일반 접미어 토큰만 지칭됐는지(마지막 토큰이 일반 접미어)."""
+    tokens = re.sub(r"·", " ", law_name or "").split()
+    return bool(tokens) and tokens[-1] in _GENERIC_LAW_TOKENS
+
 
 def _compact(date_str: str) -> str:
     return re.sub(r"\D", "", date_str or "")
@@ -353,8 +368,12 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
     db_name = s["name"].strip()
     exact_match = db_name == cited
     if not exact_match:
+        # 앞에 조사·수식이 붙어(예: "근거 법령으로는 의료법") db명이 인용문의 '접미'로
+        # 깔끔히 정렬되면 헐거운 매칭이 아니라 접두 노이즈일 뿐 — 모호 판정에서 제외.
+        _squash = lambda x: re.sub(r"\s", "", x)
+        clean_suffix = _squash(cited).endswith(_squash(db_name))
         coverage = len(db_name) / len(cited) if cited else 1.0
-        ambiguous = len(db_name) <= 4 and coverage < 0.6
+        ambiguous = not clean_suffix and len(db_name) <= 4 and coverage < 0.6
         if ambiguous and status == "확인":
             status = "주의"
             score = min(score, 70)
@@ -451,6 +470,11 @@ def extract_and_verify(text: str, as_of: str | None) -> list[VerifyResult]:
 
     for m in _STATUTE_RE.finditer(text):
         law_name, art, art_ui, _hang = m.group(1), m.group(2), m.group(3), m.group(4)
+        # 이름 없는 일반 지칭("그 법 제5조", "조 및 같은 법 시행규칙")이고 DB에 대응
+        # 법령이 없으면 검증 불가한 익명 참조·오추출 → skip(환각 아님, ERROR 오탐 방지).
+        # 실제 법령(약사법 등)이면 _match_statute 가 잡으므로 skip 안 됨(미수록은 ERROR 유지).
+        if _is_generic_law_ref(law_name) and _match_statute(law_name) is None:
+            continue
         article_no = f"{art}의{art_ui}" if art_ui else art
         paragraph_no = int(_hang) if _hang else None
         key = f"s:{law_name.strip()}:{article_no}:{_hang or ''}"

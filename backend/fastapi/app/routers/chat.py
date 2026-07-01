@@ -64,7 +64,9 @@ SYSTEM_PROMPT = (
     "2. 근거에 없으면 추측하지 말고 '제공된 자료로는 확인되지 않습니다'라고 답하세요.\n"
     "3. 답변에 사용한 근거는 문장 끝에 [1], [2]처럼 번호로 인용하세요.\n"
     "4. 법령명과 조문번호는 근거에 적힌 그대로 정확히 쓰세요(없는 조문을 만들지 마세요).\n"
-    "5. 마지막에 '※ 본 답변은 법률 자문이 아니라 정보 제공입니다.'를 한 줄 덧붙이세요."
+    "5. [근거]에 없는 다른 법령·판례는 이름조차 언급하지 마세요(예: 약사법·형법 등 4개 법 밖의 법). "
+    "범위를 벗어나면 지어내지 말고 2번처럼 '제공된 자료로는 확인되지 않습니다'라고 답하세요.\n"
+    "6. 마지막에 '※ 본 답변은 법률 자문이 아니라 정보 제공입니다.'를 한 줄 덧붙이세요."
 )
 
 SYSTEM_PROMPT_EN = (
@@ -78,7 +80,10 @@ SYSTEM_PROMPT_EN = (
     "4. Sources marked '(official English)' are the official English translation of a statute — "
     "quote the law and article names exactly as given. Sources marked '(Korean source)' have no "
     "official English version; translate them yourself and mark such text as '(unofficial translation)'.\n"
-    "5. End with: '* This response is informational, not legal advice.'"
+    "5. Do NOT mention any law or precedent that is not in the [Sources] (e.g. the Pharmaceutical "
+    "Affairs Act, the Criminal Act, or any statute outside the four covered laws). If it is out of "
+    "scope, do not invent it — answer as in rule 2.\n"
+    "6. End with: '* This response is informational, not legal advice.'"
 )
 
 _NO_EVIDENCE = "제공된 자료로는 확인되지 않습니다. 질문을 더 구체화해 주세요.\n※ 본 답변은 법률 자문이 아니라 정보 제공입니다."
@@ -181,6 +186,30 @@ def _citation_check(answer: str, as_of) -> VerifyResponse:
     return VerifyResponse(output=results, summary=summarize(results), as_of=as_of)
 
 
+def _offcorpus_note(cc: VerifyResponse, lang: str) -> str:
+    """확인된 코퍼스(4개 법) 밖 인용에 대한 비파괴 경고 한 줄(겹2-A).
+
+    LLM이 근거 밖 법령·판례를 흘려 쓰면 Citation Firewall이 exists=False로 잡는다.
+    본문은 그대로 두고, 검증 안 된 인용을 끝에 명시해 사용자가 오인하지 않게 한다.
+    """
+    seen: set[str] = set()
+    labels: list[str] = []
+    for r in cc.output:
+        raw = (r.raw or "").strip()
+        if not r.exists and raw and raw not in seen:
+            seen.add(raw)
+            labels.append(raw)
+    if not labels:
+        return ""
+    joined = ", ".join(labels)
+    if lang == "en":
+        return ("\n\n⚠️ The following citations are outside the verified corpus "
+                "(Medical Service Act, PIPA, Bioethics Act, Network Act) and could not be "
+                f"confirmed — treat as reference only: {joined}")
+    return ("\n\n⚠️ 다음 인용은 확인된 코퍼스(의료법·개인정보보호법·생명윤리법·정보통신망법) 밖이라 "
+            f"검증되지 않았습니다 — 참고용으로만 보세요: {joined}")
+
+
 def _chat_impl(req: ChatRequest):
     """/chat 의 실제 구현. lang 은 호출 측에서 req.lang 으로 고정해 넘긴다
     (한국어판='ko', 영어판='en'). 내부 _build·detect_lang 가 req.lang 을 그대로
@@ -214,10 +243,12 @@ def _chat_impl(req: ChatRequest):
         raise HTTPException(503, str(e))
     if decision["needs_clarification"]:  # Tier 2 모호 → 답변 끝에 되묻기 한 줄
         answer += _CLARIFY_EN if lang == "en" else _CLARIFY
+    cc = _citation_check(answer, req.as_of)  # 경고 덧붙이기 전 원문 기준으로 검증
+    answer += _offcorpus_note(cc, lang)      # 겹2-A: 코퍼스 밖 인용 비파괴 경고
     return ChatResponse(
         answer=answer, answer_segments=segment_answer(answer, sources),
         sources=sources, method=method, lang=lang, search_query=search_q,
-        citation_check=_citation_check(answer, req.as_of), as_of=req.as_of,
+        citation_check=cc, as_of=req.as_of,
     )
 
 
