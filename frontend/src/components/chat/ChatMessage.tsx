@@ -78,35 +78,68 @@ export default function ChatMessage({ message }: ChatMessageProps) {
     );
   }
 
-  // 2) AI 답변 → 왼쪽, 흰 카드 + 신뢰점수 + 근거 법령
+  // 2) AI 답변 → 왼쪽, 흰 카드 + (신뢰점수 좌 · 근거 법령 우)
+  const hasEvidence = !!message.citations && message.citations.length > 0
   return (
     <div className="flex justify-start">
-      <div className="max-w-[80%] space-y-3">
+      <div className="max-w-[85%] space-y-3">
         {/* 답변 본문 — 경량 마크다운 렌더링(문단/불릿/굵게) */}
         <div className="rounded-2xl rounded-tl-sm border border-gray-200 bg-white px-4 py-3 text-sm leading-relaxed text-gray-800">
           <MarkdownLite text={message.content} />
         </div>
 
-        {/* 신뢰 점수 — trustScore가 있을 때만 */}
-        {message.trustScore !== undefined && (
-          <div className="px-1">
-            <TrustScore score={message.trustScore} />
-          </div>
-        )}
-
-        {/* 근거 법령 — citations가 있을 때만 */}
-        {message.citations && message.citations.length > 0 && (
-          <div className="space-y-2">
-            <p className="px-1 text-xs font-semibold text-gray-500">{t('chat.evidenceLabel')}</p>
-            {message.citations.map((c) => (
-              <div key={c.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="text-sm font-semibold text-navy">{c.lawName}</span>
-                  <CitationBadge status={c.status} />
-                </div>
-                <p className="text-xs leading-relaxed text-gray-600">{c.clause}</p>
+        {/* 신뢰도(좌) + 근거 법령(우) — 한 줄 배치. 카드는 컴팩트(한 줄 요약)하고,
+            클릭하면 원문(법령·판례 등)이 새 탭으로 열린다. */}
+        {(message.trustScore !== undefined || hasEvidence) && (
+          <div className="flex gap-3">
+            {message.trustScore !== undefined && (
+              <div className="flex-shrink-0 pt-0.5">
+                <TrustScore score={message.trustScore} />
               </div>
-            ))}
+            )}
+
+            {hasEvidence && (
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <p className="text-xs font-semibold text-gray-500">{t('chat.evidenceLabel')}</p>
+                {message.citations!.map((c) => {
+                  const clause = (c.clause ?? '').trim()
+                  const inner = (
+                    <>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-navy">
+                          {c.lawName}
+                          {c.sourceUrl && <span className="ml-1 text-[10px] text-aqua">↗</span>}
+                        </span>
+                        <CitationBadge status={c.status} />
+                      </div>
+                      {clause && (
+                        <p className="mt-0.5 truncate text-[11px] leading-relaxed text-gray-500">
+                          {clause}
+                        </p>
+                      )}
+                    </>
+                  )
+                  return c.sourceUrl ? (
+                    <a
+                      key={c.id}
+                      href={c.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 transition hover:border-aqua hover:bg-white"
+                    >
+                      {inner}
+                    </a>
+                  ) : (
+                    <div
+                      key={c.id}
+                      className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5"
+                    >
+                      {inner}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>
