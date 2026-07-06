@@ -14,9 +14,9 @@
 from __future__ import annotations
 
 import contextvars
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from functools import lru_cache
 
 from app import llm
 from app.db import db, has_embeddings
@@ -60,9 +60,19 @@ _AD_CORE_ARTICLES = [("의료법", "56"), ("의료법", "27"), ("의료법", "57
 _AD_CORE_SNIPPET = 600  # 제56조 경험담(≈340)·제27조 유인(≈537)이 보이도록.
 
 
-@lru_cache(maxsize=1)
+# 핵심조문 캐시 — 영구 lru_cache 대신 1시간 TTL. DB의 법령 개정이 프로세스 재시작 없이
+# 반영되도록 한다. 락 없이 단순하게 유지: 경합 시 최악이 DB 한 번 더 조회(무해).
+_AD_CORE_TTL = 3600.0  # 초
+_AD_CORE_CACHE: tuple | None = None
+_AD_CORE_CACHE_AT: float = 0.0
+
+
 def _ad_core_hits() -> tuple:
-    """의료광고 핵심 금지조문 Hit(프로세스 1회 캐시). DB 문제 시 빈 튜플(graceful)."""
+    """의료광고 핵심 금지조문 Hit(1시간 TTL 캐시). DB 문제 시 빈 튜플(graceful)."""
+    global _AD_CORE_CACHE, _AD_CORE_CACHE_AT
+    if (_AD_CORE_CACHE is not None
+            and time.monotonic() - _AD_CORE_CACHE_AT <= _AD_CORE_TTL):
+        return _AD_CORE_CACHE
     out: list[Hit] = []
     try:
         for law, art in _AD_CORE_ARTICLES:
@@ -85,8 +95,10 @@ def _ad_core_hits() -> tuple:
                 effective_from=row["effective_from"], source_url=row["source_url"] or "",
             ))
     except Exception:  # noqa: BLE001 — DB 문제 시 주입 생략(검색만으로 graceful)
-        return tuple()
-    return tuple(out)
+        return tuple()  # 실패는 캐시하지 않음 — 다음 호출에서 재시도.
+    _AD_CORE_CACHE = tuple(out)
+    _AD_CORE_CACHE_AT = time.monotonic()
+    return _AD_CORE_CACHE
 
 
 def _inject_ad_core(segments: list[Segment], per_segment: list[list]) -> None:
