@@ -15,6 +15,31 @@ const STATUS_MAP: Record<string, CitationStatus> = {
   ERROR: 'error',
 }
 
+// 근거(evidences)·검증(verifications) → 화면용 citations/trustScore 변환.
+// 라이브 응답(handleSend)과 대화 복원(mapChats)에서 동일하게 사용해, 새로고침·방
+// 재진입 후에도 근거 법령 카드와 신뢰도 점수가 동일하게 나오도록 한다.
+function buildCitationData(
+  evidences: any[] | undefined,
+  verifications: any[] | undefined,
+): { citations?: Citation[]; trustScore?: number } {
+  const citations: Citation[] = (evidences ?? []).map((ev: any) => ({
+    id: String(ev.evidence_id),
+    lawName: ev.article_no ? `${ev.law_name} ${ev.article_no}` : ev.law_name,
+    clause: (ev.core_basis ?? '')
+      .replace(/^#.*$/gm, '')
+      .replace(/\n{2,}/g, '\n')
+      .trim(),
+    status: 'verified' as CitationStatus,
+    sourceUrl: ev.source_url ?? undefined,
+  }))
+  const firstV = (verifications ?? [])[0]
+  const trustScore = firstV?.confidence_score
+  if (firstV?.verification_status && STATUS_MAP[firstV.verification_status] && citations[0]) {
+    citations[0].status = STATUS_MAP[firstV.verification_status]
+  }
+  return { citations: citations.length > 0 ? citations : undefined, trustScore }
+}
+
 interface RoomItem {
   room_id: number
   room_title: string
@@ -37,13 +62,31 @@ export default function Chat() {
   const [sidebarOpen, setSidebarOpen] = useState(true) // 사이드바 접기/펼치기
   const navigate = useNavigate()
 
-  const mapChats = (chats: { chat_id: number; speaker_type: string; chat_text: string; chatted_at?: string }[]): ChatMessageType[] =>
-    chats.map((c) => ({
-      id: String(c.chat_id),
-      role: c.speaker_type === 'USER' ? 'user' : 'assistant',
-      content: c.chat_text,
-      timestamp: c.chatted_at ?? '',
-    }))
+  const mapChats = (
+    chats: {
+      chat_id: number
+      speaker_type: string
+      chat_text: string
+      chatted_at?: string
+      evidences?: any[]
+      verifications?: any[]
+    }[],
+  ): ChatMessageType[] =>
+    chats.map((c) => {
+      const msg: ChatMessageType = {
+        id: String(c.chat_id),
+        role: c.speaker_type === 'USER' ? 'user' : 'assistant',
+        content: c.chat_text,
+        timestamp: c.chatted_at ?? '',
+      }
+      // AI 답변이면 저장된 근거·검증으로 카드·점수 복원 (라이브 응답과 동일하게).
+      if (c.speaker_type !== 'USER') {
+        const { citations, trustScore } = buildCitationData(c.evidences, c.verifications)
+        msg.citations = citations
+        msg.trustScore = trustScore
+      }
+      return msg
+    })
 
   const loadRooms = async (): Promise<RoomItem[]> => {
     const res = await getRooms()
@@ -170,32 +213,14 @@ export default function Chat() {
       const res = await askAi(activeId, question, lang)
       const data = res.data
       const answer = data?.answer_chat
-      const evidences = data?.evidences ?? []
-      const verifications = data?.verifications ?? []
-
-      const citations: Citation[] = evidences.map((ev: any) => ({
-        id: String(ev.evidence_id),
-        lawName: ev.article_no ? `${ev.law_name} ${ev.article_no}` : ev.law_name,
-        clause: (ev.core_basis ?? '')
-          .replace(/^#.*$/gm, '')
-          .replace(/\n{2,}/g, '\n')
-          .trim(),
-        status: 'verified',
-        sourceUrl: ev.source_url ?? undefined,
-      }))
-
-      const firstV = verifications[0]
-      const trustScore = firstV?.confidence_score
-      if (firstV?.verification_status && STATUS_MAP[firstV.verification_status] && citations[0]) {
-        citations[0].status = STATUS_MAP[firstV.verification_status]
-      }
+      const { citations, trustScore } = buildCitationData(data?.evidences, data?.verifications)
 
       addMessage({
         id: String(answer?.chat_id ?? Date.now()),
         role: 'assistant',
         content: answer?.chat_text ?? t('chat.answerEmpty'),
         timestamp: answer?.chatted_at ?? new Date().toISOString(),
-        citations: citations.length > 0 ? citations : undefined,
+        citations,
         trustScore,
       })
     } catch (err: any) {
