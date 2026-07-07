@@ -1,5 +1,6 @@
 """OpenAI 생성 LLM 래퍼 (gpt-5.5). 챗봇·PDF 에디터 공용."""
 import json
+import threading
 from collections.abc import Iterator
 
 from app.config import CHAT_MODEL, OPENAI_API_KEY, REASONING_EFFORT
@@ -9,12 +10,29 @@ class LLMUnavailable(RuntimeError):
     """OPENAI_API_KEY 미설정 등 LLM 사용 불가."""
 
 
-def _client():
+# 공유 OpenAI 클라이언트 — 매 호출마다 새로 만들면 커넥션 풀/TLS 핸드셰이크가 재생성돼
+# 지연이 누적된다. OpenAI 클라이언트는 스레드 안전이므로 프로세스 1회 지연 생성해 재사용한다
+# (임베딩 호출부 app.rag / app.citations 도 이 클라이언트를 공유). 키 미설정이면 기존과
+# 동일하게 '호출 시점'에 LLMUnavailable — import 시점엔 아무 일도 일어나지 않는다.
+_client_lock = threading.Lock()
+_shared_client = None
+
+
+def openai_client():
+    """공유 OpenAI 클라이언트(지연 생성·프로세스 1회 캐시). 키 없으면 LLMUnavailable."""
+    global _shared_client
     if not OPENAI_API_KEY:
         raise LLMUnavailable("OPENAI_API_KEY 가 설정되지 않았습니다")
-    from openai import OpenAI
+    if _shared_client is None:
+        with _client_lock:
+            if _shared_client is None:  # double-checked — 경합 시 중복 생성 방지
+                from openai import OpenAI
 
-    return OpenAI(api_key=OPENAI_API_KEY)
+                _shared_client = OpenAI(api_key=OPENAI_API_KEY)
+    return _shared_client
+
+
+_client = openai_client  # 모듈 내부 기존 호출명 유지
 
 
 # 모든 생성 호출 공통 옵션 — 추론 강도 낮춰 지연 단축(REASONING_EFFORT 빈값이면 미전달).

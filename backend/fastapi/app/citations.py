@@ -158,10 +158,9 @@ def _content_embed(texts: list[str]) -> list[list[float]] | None:
     if miss:
         uniq = list(miss.keys())
         try:
-            from openai import OpenAI
+            from app.llm import openai_client  # 공유 클라이언트 재사용(매 호출 재생성 방지)
 
-            client = OpenAI(api_key=config.OPENAI_API_KEY)
-            resp = client.embeddings.create(model=model, input=uniq, dimensions=dim)
+            resp = openai_client().embeddings.create(model=model, input=uniq, dimensions=dim)
             by_idx = {d.index: d.embedding for d in resp.data}
         except Exception:
             return None
@@ -208,30 +207,29 @@ def _content_similarity(claim: str, content: str) -> float | None:
 _CLAIM_MIN_SUBSTANTIVE = 10
 
 
-def _apply_content_check(result: VerifyResult, claim: str | None, content: str | None) -> VerifyResult:
-    """구조 검증 결과에 내용 일치 검증을 후처리(플래그 ON일 때만).
-
-    - 유사도 계산됨 && < THRESHOLD && status=='확인' → '주의'로 다운그레이드(오류 단정 X),
-      content_match=False, content_score=sim, note에 사유 추가.
-    - 유사도 >= THRESHOLD → content_match=True, content_score=sim (status 유지).
-    - 유사도 None(미검증/키없음) → content_match=None (불변).
-    구조상 이미 '오류'/'주의'면 status·점수는 건드리지 않는다(content_match/score만 기록).
-    """
+def _content_check_target(result: VerifyResult, claim: str | None, content: str | None) -> bool:
+    """내용 일치 검증 대상인지(플래그·statute 한정·claim 실질성) — 단건/배치 공용 가드."""
     if not config.CONTENT_CHECK:
-        return result
+        return False
     if result.type != "statute":
-        return result  # 내용 일치 검증은 법령(조문)에만 — 판례 등은 본문 길이차로 보정 불가
+        return False  # 내용 일치 검증은 법령(조문)에만 — 판례 등은 본문 길이차로 보정 불가
     if not claim or not content:
-        return result  # claim 모름/본문 없음 → 미검증(None 유지)
+        return False  # claim 모름/본문 없음 → 미검증(None 유지)
     # 실질적 '주장'에만 작동: 인용 토큰(법령·판례)을 제거한 뒤 남는 의미 텍스트가 짧으면
     # (단순 인용·나열) 내용검증 skip — 인용 나열에 오탐 다운그레이드 방지.
     bare = _CASE_RE.sub(" ", _STATUTE_RE.sub(" ", claim))
     substance = re.sub(r"[^가-힣A-Za-z0-9]", "", bare)
-    if len(substance) < _CLAIM_MIN_SUBSTANTIVE:
-        return result
-    sim = _content_similarity(claim, content)
-    if sim is None:
-        return result  # 키없음/실패 → content_match=None 유지
+    return len(substance) >= _CLAIM_MIN_SUBSTANTIVE
+
+
+def _apply_content_score(result: VerifyResult, sim: float) -> VerifyResult:
+    """계산된 유사도를 result 에 반영(단건/배치 공용 후처리).
+
+    - sim < THRESHOLD && status=='확인' → '주의'로 다운그레이드(오류 단정 X),
+      content_match=False, content_score=sim, note에 사유 추가.
+    - sim >= THRESHOLD → content_match=True, content_score=sim (status 유지).
+    구조상 이미 '오류'/'주의'면 status·점수는 건드리지 않는다(content_match/score만 기록).
+    """
     result.content_score = round(sim, 4)
     threshold = config.CONTENT_SIM_THRESHOLD
     if sim < threshold:
@@ -243,6 +241,64 @@ def _apply_content_check(result: VerifyResult, claim: str | None, content: str |
     else:
         result.content_match = True
     return result
+
+
+def _apply_content_check(result: VerifyResult, claim: str | None, content: str | None) -> VerifyResult:
+    """구조 검증 결과에 내용 일치 검증을 후처리(플래그 ON일 때만).
+
+    유사도 None(미검증/키없음) → content_match=None (불변).
+    여러 인용을 한 번에 검증할 땐 _apply_content_checks(배치판)를 쓴다.
+    """
+    if not _content_check_target(result, claim, content):
+        return result
+    sim = _content_similarity(claim, content)
+    if sim is None:
+        return result  # 키없음/실패 → content_match=None 유지
+    return _apply_content_score(result, sim)
+
+
+def _apply_content_checks(items: list[tuple[VerifyResult, str | None, str | None]]) -> None:
+    """여러 인용의 내용 일치 검증 — _apply_content_check 의 배치판(결과는 in-place 반영).
+
+    가드·판정 로직은 단건과 동일하되, 전 인용의 claim/본문 청크를 모아 임베딩 API 를
+    **1회 배치 호출**로 줄인다(인용 N건 → 왕복 N→1). 캐시 의미는 _content_embed 가
+    그대로 처리한다(적중분 제외·미적중 유니크만 호출). 실패 시 전체 graceful skip.
+    """
+    todo: list[tuple[VerifyResult, str, list[str]]] = []
+    for result, claim, content in items:
+        if not _content_check_target(result, claim, content):
+            continue
+        chunks = _content_chunks(content)
+        if chunks:
+            todo.append((result, claim, chunks))
+    if not todo:
+        return
+    texts: list[str] = []
+    for _, claim, chunks in todo:
+        texts.append(claim)
+        texts.extend(chunks)
+    try:
+        import numpy as np
+
+        embs = _content_embed(texts)
+        if not embs:
+            return  # 키없음/실패 → 전부 content_match=None 유지(단건과 동일)
+        pos = 0
+        for result, claim, chunks in todo:
+            span = embs[pos:pos + 1 + len(chunks)]
+            pos += 1 + len(chunks)
+            cvec = np.asarray(span[0], dtype=np.float32)
+            cnorm = np.linalg.norm(cvec) or 1.0
+            best = None
+            for e in span[1:]:
+                v = np.asarray(e, dtype=np.float32)
+                sim = float(cvec @ v / (cnorm * (np.linalg.norm(v) or 1.0)))
+                if best is None or sim > best:
+                    best = sim
+            if best is not None:
+                _apply_content_score(result, best)
+    except Exception:
+        return  # numpy 부재 등 — 단건(_content_similarity)과 동일하게 graceful skip
 
 
 def _match_statute(law_name: str):
@@ -323,7 +379,8 @@ def _cross_check_revisions(s, as_of, score, status, notes) -> tuple[int, str]:
 
 
 def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str | None,
-                   paragraph_no: int | None = None, claim: str | None = None) -> VerifyResult:
+                   paragraph_no: int | None = None, claim: str | None = None,
+                   content_batch: list | None = None) -> VerifyResult:
     s = _match_statute(law_name)
     if not s:
         # DB에 없는 법령: '환각'으로 단정(오류/0점)하지 않는다 — 실재하나 코퍼스(4개 법)
@@ -423,6 +480,11 @@ def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str |
         matched_source_url=article_url, note=note,
     )
     # 내용 일치 검증(플래그 ON & claim·본문 있을 때만). 조문 본문을 비교 대상으로.
+    # content_batch 가 주어지면(extract_and_verify) 검증을 미뤄뒀다가 여러 인용을
+    # 임베딩 1회 배치로 처리한다(_apply_content_checks) — 단건 호출 동작은 불변.
+    if content_batch is not None:
+        content_batch.append((result, claim, article_content))
+        return result
     return _apply_content_check(result, claim, article_content)
 
 
@@ -492,9 +554,12 @@ def extract_and_verify(text: str, as_of: str | None) -> list[VerifyResult]:
 
     각 인용 매치마다 그것을 포함하는 '주장 문장'을 함께 넘겨 내용 일치 검증에 쓴다
     (CONTENT_CHECK ON일 때만 사용; OFF면 무시되어 기존 동작 불변).
+    내용 일치 검증은 인용별로 임베딩을 호출하지 않고, 전 인용을 모아 마지막에
+    임베딩 1회 배치(_apply_content_checks)로 처리한다(지연 단축).
     """
     results: list[VerifyResult] = []
     seen: set[str] = set()
+    pending_content: list[tuple[VerifyResult, str | None, str | None]] = []
 
     for m in _STATUTE_RE.finditer(text):
         law_name, art, art_ui, _hang = m.group(1), m.group(2), m.group(3), m.group(4)
@@ -511,7 +576,8 @@ def extract_and_verify(text: str, as_of: str | None) -> list[VerifyResult]:
         seen.add(key)
         claim = _claim_sentence(text, m.start(), m.end())
         results.append(
-            verify_statute(law_name, article_no, m.group(0).strip(), as_of, paragraph_no, claim))
+            verify_statute(law_name, article_no, m.group(0).strip(), as_of, paragraph_no, claim,
+                           content_batch=pending_content))
 
     for m in _CASE_RE.finditer(text):
         case_no = re.sub(r"\s", "", m.group(1))
@@ -523,6 +589,8 @@ def extract_and_verify(text: str, as_of: str | None) -> list[VerifyResult]:
         claim = _claim_sentence(text, m.start(), m.end())
         results.append(verify_case(case_no, m.group(0).strip(), as_of, claim))
 
+    # 미뤄둔 내용 일치 검증을 임베딩 1회 배치로 일괄 처리(결과 in-place 반영).
+    _apply_content_checks(pending_content)
     return results
 
 

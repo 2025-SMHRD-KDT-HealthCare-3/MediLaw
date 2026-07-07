@@ -38,6 +38,8 @@ import base64
 import io
 import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 # 단독 러너(__main__)에서도 `from app.pdf...` import가 되도록 프로젝트 루트를 path에 추가.
 sys.path.insert(
@@ -59,6 +61,11 @@ OCR_FALLBACK_BACKEND = os.environ.get("OCR_FALLBACK_BACKEND", "vision")
 
 OCR_SCALE = 2.0            # 렌더 배율(≈144DPI; A4 기준 ~1.7K, scale 2.0이면 ~2K폭)
 OCR_MAX_PAGES = 20         # 비용/시간 방어 상한
+
+# 페이지 OCR 병렬 워커 상한(작게 유지). vision 폴백은 페이지당 외부 API 왕복이라 순차 시
+# 페이지 수만큼 지연이 누적된다 → 페이지 단위로 병렬 처리(출력 블록 순서는 순차와 동일).
+# paddleocr_vl 은 _PADDLE_LOCK 으로 직렬화되므로 병렬화 영향 없음(기존과 동일 순차).
+OCR_PAGE_WORKERS = max(1, int(os.environ.get("OCR_PAGE_WORKERS", "4") or 4))
 
 # 낮은 신뢰도 플래그 임계값(이 미만이면 low_confidence=True 로 표시).
 # vision 폴백은 confidence=None 이라 플래그 대상이 아님.
@@ -120,6 +127,11 @@ _VL_SKIP_LABELS = {"image", "figure", "chart", "seal", "stamp"}
 
 # 프로세스 1회 캐시(지연 생성). _SENTINEL=초기화 안 함, None=초기화 실패(가중치 차단 등).
 _PADDLE_VL = "__uninitialized__"
+
+# PaddleOCR-VL 직렬화 락 — 인스턴스 지연 생성/predict 는 스레드 안전이 보장되지 않으므로,
+# 페이지 병렬 OCR(extract_ocr) 시에도 paddle 경로는 한 번에 한 페이지만 처리한다
+# (= 기존 순차 동작과 동일, 병렬 이득은 외부 API 왕복인 vision 경로에서만).
+_PADDLE_LOCK = threading.Lock()
 
 
 def _bbox_from_polygon(poly) -> "list[float] | None":
@@ -299,32 +311,34 @@ def _ocr_paddleocr_vl(b64_png: str) -> "list[tuple[str, str, float | None, list[
       2) b64 PNG → ndarray(BGR) 로 디코드해 ocr.predict() 추론.
       3) 결과(parsing_res_list / spotting_res)를 _map_vl_result 로 매핑.
     모든 실패(URLError/추론 오류 등)는 graceful — 빈 리스트(예외 전파 금지).
+    페이지 병렬 OCR에서 불려도 안전하도록 전체를 _PADDLE_LOCK 으로 직렬화한다.
     """
-    ocr = _get_paddle_vl()
-    if ocr is None:
-        return []
-    try:
-        import numpy as np
-        from PIL import Image
-        img = Image.open(io.BytesIO(base64.b64decode(b64_png))).convert("RGB")
-        arr = np.array(img)[:, :, ::-1]  # RGB → BGR(paddle 관례)
-    except Exception as e:  # noqa: BLE001
-        print(f"[extract_ocr] paddleocr_vl 이미지 디코드 실패 → skip: {e}")
-        return []
-    try:
-        results = ocr.predict(arr)
-    except Exception as e:  # noqa: BLE001
-        print(f"[extract_ocr] paddleocr_vl predict 실패 → graceful 빈 결과: "
-              f"{type(e).__name__}: {e}")
-        return []
-    # predict 는 페이지(이미지)당 결과 리스트(또는 제너레이터)를 돌려준다.
-    out: "list[tuple[str, str, float | None, list[float] | None]]" = []
-    try:
-        for res in results:
-            out.extend(_map_vl_result(res, page_no=0))
-    except Exception as e:  # noqa: BLE001
-        print(f"[extract_ocr] paddleocr_vl 결과 매핑 중 오류(부분 결과 유지): {e}")
-    return out
+    with _PADDLE_LOCK:
+        ocr = _get_paddle_vl()
+        if ocr is None:
+            return []
+        try:
+            import numpy as np
+            from PIL import Image
+            img = Image.open(io.BytesIO(base64.b64decode(b64_png))).convert("RGB")
+            arr = np.array(img)[:, :, ::-1]  # RGB → BGR(paddle 관례)
+        except Exception as e:  # noqa: BLE001
+            print(f"[extract_ocr] paddleocr_vl 이미지 디코드 실패 → skip: {e}")
+            return []
+        try:
+            results = ocr.predict(arr)
+        except Exception as e:  # noqa: BLE001
+            print(f"[extract_ocr] paddleocr_vl predict 실패 → graceful 빈 결과: "
+                  f"{type(e).__name__}: {e}")
+            return []
+        # predict 는 페이지(이미지)당 결과 리스트(또는 제너레이터)를 돌려준다.
+        out: "list[tuple[str, str, float | None, list[float] | None]]" = []
+        try:
+            for res in results:
+                out.extend(_map_vl_result(res, page_no=0))
+        except Exception as e:  # noqa: BLE001
+            print(f"[extract_ocr] paddleocr_vl 결과 매핑 중 오류(부분 결과 유지): {e}")
+        return out
 
 
 # ── 백엔드: vision (개발 폴백, OpenAI) ────────────────────────────────────────
@@ -378,23 +392,38 @@ def extract_ocr(pdf_bytes: bytes, pages: "list[int] | None" = None) -> "list[Blo
     if not rendered:
         return []
 
-    blocks: "list[Block]" = []
-    counter = 0
-    for page_no, b64 in rendered:
+    def _ocr_page(b64: str) -> "tuple[list, bool]":
+        """한 페이지 OCR: 1차 백엔드 → 빈 결과/실패 시 폴백. (lines, 폴백사용여부) 반환."""
         try:
             lines = backend(b64)
         except Exception:
             # 백엔드 자체 예외(가중치 차단 등) → 빈 결과로 두고 아래 폴백에 맡김
             lines = []
+        used_fallback = False
         if not lines and fallback is not None:
             # 1차 백엔드가 빈 결과/실패 → 폴백(gpt-5.5 비전)으로 재시도.
             try:
                 lines = fallback(b64)
             except Exception:
                 lines = []
-            if lines:
-                print(f"[extract_ocr] p{page_no}: {OCR_BACKEND} 빈 결과 → "
-                      f"{OCR_FALLBACK_BACKEND} 폴백 사용({len(lines)}줄)")
+            used_fallback = bool(lines)
+        return lines, used_fallback
+
+    # 페이지 OCR 병렬 실행(상한 OCR_PAGE_WORKERS) — vision(외부 API 왕복)은 페이지 수만큼
+    # 순차 지연이 누적되므로 병렬화한다. paddle 은 _PADDLE_LOCK 으로 직렬화(기존과 동일).
+    # 결과는 rendered 순서 그대로 zip 매핑하므로 블록 순서·ID(counter)는 순차 처리와 같다.
+    if len(rendered) <= 1:
+        page_results = [_ocr_page(b64) for _, b64 in rendered]
+    else:
+        with ThreadPoolExecutor(max_workers=min(OCR_PAGE_WORKERS, len(rendered))) as ex:
+            page_results = list(ex.map(_ocr_page, (b64 for _, b64 in rendered)))
+
+    blocks: "list[Block]" = []
+    counter = 0
+    for (page_no, _b64), (lines, used_fallback) in zip(rendered, page_results):
+        if used_fallback:
+            print(f"[extract_ocr] p{page_no}: {OCR_BACKEND} 빈 결과 → "
+                  f"{OCR_FALLBACK_BACKEND} 폴백 사용({len(lines)}줄)")
         for item in lines:
             btype, text, conf, bbox = _normalize_line(item)
             if not text:

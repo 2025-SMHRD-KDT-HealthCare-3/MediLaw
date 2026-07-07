@@ -62,10 +62,9 @@ def embed_query(text: str) -> list[float] | None:
     if not OPENAI_API_KEY:
         return None
     try:
-        from openai import OpenAI
+        from app.llm import openai_client  # 공유 클라이언트 재사용(매 호출 재생성 방지)
 
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.embeddings.create(
+        resp = openai_client().embeddings.create(
             model=EMBED_MODEL, input=text, dimensions=EMBED_DIM
         )
         return resp.data[0].embedding
@@ -130,10 +129,9 @@ def embed_queries(texts: list[str]) -> list[list[float] | None]:
     # 2) 미캐시 유니크 텍스트만 1회 배치 임베딩.
     uniq_texts = list(miss_positions.keys())
     try:
-        from openai import OpenAI
+        from app.llm import openai_client  # 공유 클라이언트 재사용(매 호출 재생성 방지)
 
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.embeddings.create(
+        resp = openai_client().embeddings.create(
             model=EMBED_MODEL, input=uniq_texts, dimensions=EMBED_DIM
         )
         # data 순서는 input 순서와 같지만 방어적으로 index 기준 정렬.
