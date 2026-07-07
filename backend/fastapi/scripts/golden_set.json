@@ -219,9 +219,9 @@
     {
       "id": "new-02",
       "domain": "신규 코퍼스",
-      "question": "약국에 설치된 원격화상투약기를 이용해서 일반의약품을 판매할 수 있나요?",
+      "question": "의료기관이 아닌 업체가 제공하는 건강관리서비스는 의료행위와 어떻게 구분되나요?",
       "expected": [
-        {"type": "doc", "doc_type": "interpretation", "title_contains": "화상투약기"}
+        {"type": "doc", "doc_type": "guideline", "title_contains": "비의료 건강관리서비스"}
       ]
     },
     {
