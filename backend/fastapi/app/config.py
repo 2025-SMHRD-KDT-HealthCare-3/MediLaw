@@ -40,7 +40,10 @@ DEFAULT_TOP_K = 8
 # 재랭킹: 핵심 법령(trust_grade='법령')의 RRF 점수에 곱하는 가중.
 # 제목이 비슷한 행정규칙이 핵심 4대 법령을 상위에서 밀어내는 문제를 보정한다(배제 아닌 가중).
 # 1.0이면 가중 없음. 과하면 가이드라인·행정규칙이 필요할 때 안 나오므로 보수적으로.
-STATUTE_BOOST = float(os.environ.get("STATUTE_BOOST", "1.4"))
+# 기본 1.0 — FTS 채널이 핵심 법령만 랭킹하도록 바뀌어(rag.fts_search + STATUTE_CORE_ONLY)
+# 가중의 원래 목적(FTS 풀 포화 보정)이 해소됨. 1.4를 유지하면 핵심 법령이 top-k를 독식해
+# 가이드라인·결정문이 밀려나는 회귀를 골든셋으로 실측(hit@8 1.00→0.96, med-03 MISS).
+STATUTE_BOOST = float(os.environ.get("STATUTE_BOOST", "1.0"))
 # 후보 풀 크기(RRF 융합 전 FTS·벡터에서 모으는 후보 수). 클수록 핵심 법령이 후보에
 # 진입할 확률↑(제목 동일 행정규칙이 후보를 포화시키는 문제 보정), 단 검색 지연↑.
 RAG_POOL = int(os.environ.get("RAG_POOL", "100"))

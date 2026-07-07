@@ -56,6 +56,27 @@ def _fts_match_expr(query: str) -> str:
     return " OR ".join(f'"{t}"' for t in dict.fromkeys(terms))  # 중복 제거, 순서 유지
 
 
+# ---------- 법률용어 동의어 확장 (FTS 전용) ----------
+# 일상어 질의 ↔ 법령 용어의 어휘 불일치 보정(예: "CCTV" ↔ 개보법 제25조 "고정형 영상정보처리기기").
+# FTS(BM25)는 토큰 정확일치라 표제어가 다르거나 조사가 붙으면("민감정보는"≠"민감정보") 매칭 실패.
+# 질의에 해당 법령 표제어 토큰을 덧붙여 FTS 검색에만 사용한다 — 임베딩 질의에는 적용하지
+# 않는다(용어 추가가 질의 의미를 흐려 벡터 랭킹이 오히려 악화됨을 골든셋으로 실측).
+_FTS_SYNONYMS: dict[str, str] = {
+    "cctv": "고정형 영상정보처리기기 영상정보",       # 개보법 제25조·제25조의2
+    "씨씨티비": "고정형 영상정보처리기기 영상정보",
+    "폐쇄회로": "고정형 영상정보처리기기 영상정보",
+    "민감정보": "민감정보의 처리 제한",               # 개보법 제23조(민감정보의 처리 제한) — 표제 토큰 그대로
+    "가명처리": "가명정보 처리",                      # 개보법 제28조의2(가명정보의 처리 등)
+}
+
+
+def _expand_query_for_fts(query: str) -> str:
+    """질의에 포함된 일상어 키워드에 대응하는 법령 표제어를 덧붙인 FTS용 질의 반환."""
+    q_lower = query.lower()
+    extra = [terms for key, terms in _FTS_SYNONYMS.items() if key in q_lower]
+    return f"{query} {' '.join(extra)}" if extra else query
+
+
 # ---------- 임베딩 ----------
 def embed_query(text: str) -> list[float] | None:
     """OpenAI 임베딩. 키 없으면 None → 벡터검색 건너뜀."""
@@ -248,11 +269,25 @@ def fts_search(query: str, source_types: set[str], limit: int) -> list[tuple[str
     conn = db()
     out: list[tuple[str, int]] = []
     if "statute" in source_types:
-        rows = conn.execute(
-            """SELECT a.id FROM articles_fts f JOIN articles a ON a.id = f.rowid
-               WHERE articles_fts MATCH ? ORDER BY bm25(articles_fts) LIMIT ?""",
-            (expr, limit),
-        ).fetchall()
+        if STATUTE_CORE_ONLY:
+            # 핵심 법령만 BM25 순위에 올린다 — 최종 단계에서 어차피 걸러질 비핵심 조문
+            # (부처 지침·훈령의 개보법 복제 조문 등)이 FTS 상위 랭크를 도배해 진짜 조문의
+            # RRF 점수를 희석시키는 문제 보정(실측: 개보법 제23조가 지침 복제본 73건에
+            # 밀려 rank 74 → 필터 후 최상위). 벡터 채널은 건드리지 않는다 — 벡터까지
+            # 핵심 법령으로 채우면 statute가 top-k를 독식해 가이드라인·결정문이 밀려남(실측 회귀).
+            rows = conn.execute(
+                """SELECT a.id FROM articles_fts f JOIN articles a ON a.id = f.rowid
+                   JOIN statutes s ON s.id = a.statute_id
+                   WHERE articles_fts MATCH ? AND s.trust_grade = ?
+                   ORDER BY bm25(articles_fts) LIMIT ?""",
+                (expr, CORE_TRUST_GRADE, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT a.id FROM articles_fts f JOIN articles a ON a.id = f.rowid
+                   WHERE articles_fts MATCH ? ORDER BY bm25(articles_fts) LIMIT ?""",
+                (expr, limit),
+            ).fetchall()
         out += [("statute", r["id"]) for r in rows]
     if "case" in source_types:
         rows = conn.execute(
@@ -362,7 +397,7 @@ def hybrid_search(
     types = set(source_types) if source_types else {"statute", "case", *_DOC_TYPES}
     pool = max(top_k * 3, RAG_POOL)
 
-    fts = fts_search(query, types, pool)
+    fts = fts_search(_expand_query_for_fts(query), types, pool)
     if qvec is _UNSET:
         qvec = embed_query(query) if has_embeddings() else None
     vraw = vector_search(qvec, types, pool) if qvec else []
