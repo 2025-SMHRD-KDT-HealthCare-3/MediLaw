@@ -56,7 +56,7 @@ def _call_hms_chat(question: str, history: list[dict], lang: str = "ko") -> dict
     data = hms_client.post_json(
         path,
         {"question": question, "history": history, "top_k": 8, "lang": "en" if is_en else "ko"},
-        timeout=120,
+        timeout=hms_client.DEFAULT_TIMEOUT,
     )
     if not isinstance(data, dict) or not data.get("answer"):
         raise HTTPException(
@@ -117,12 +117,45 @@ def persist_hms_verifications(
         )
     return verifications
 
-
 def hms_verification_output(citation_check: dict | None) -> list[dict]:
     if not isinstance(citation_check, dict):
         return []
     output = citation_check.get("output", [])
-    return output if isinstance(output, list) else []
+    if isinstance(output, list) and output:
+        return output
+
+    summary = citation_check.get("summary")
+    if not isinstance(summary, dict):
+        return []
+
+    score = summary.get("avg_score")
+    if score is None:
+        score = summary.get("min_score")
+    if score is None:
+        return []
+
+    total = int(summary.get("total") or 0)
+    failed = int(summary.get("failed") or 0)
+    verified = int(summary.get("verified") or 0)
+    if failed > 0:
+        status = "ERROR"
+    elif total > 0 and verified == total:
+        status = "CONFIRMED"
+    else:
+        status = "WARNING"
+
+    return [
+        {
+            "raw": "citation_check.summary",
+            "exists": total > 0,
+            "clause_accurate": None,
+            "valid_as_of": None,
+            "verified": status == "CONFIRMED",
+            "trust_score": score,
+            "status": status,
+            "note": "Citation summary score from HMS",
+        }
+    ]
 
 
 def create_ai_answer(

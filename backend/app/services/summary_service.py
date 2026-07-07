@@ -35,7 +35,7 @@ def _generate_checklist(db: Session, room_id: int) -> dict:
     return hms_client.post_json(
         "/chat/checklist",
         {"history": history, "top_k": 6, "max_topics": 5, "lang": "auto"},
-        timeout=180,
+        timeout=hms_client.DEFAULT_TIMEOUT,
     )
 
 
