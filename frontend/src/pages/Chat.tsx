@@ -22,6 +22,7 @@ function buildCitationData(
   evidences: any[] | undefined,
   verifications: any[] | undefined,
 ): { citations?: Citation[]; trustScore?: number } {
+  const verificationList = verifications ?? []
   const citations: Citation[] = (evidences ?? []).map((ev: any) => ({
     id: String(ev.evidence_id),
     lawName: ev.article_no ? `${ev.law_name} ${ev.article_no}` : ev.law_name,
@@ -32,10 +33,25 @@ function buildCitationData(
     status: 'verified' as CitationStatus,
     sourceUrl: ev.source_url ?? undefined,
   }))
-  const firstV = (verifications ?? [])[0]
-  const trustScore = firstV?.confidence_score
-  if (firstV?.verification_status && STATUS_MAP[firstV.verification_status] && citations[0]) {
-    citations[0].status = STATUS_MAP[firstV.verification_status]
+  const scores = verificationList
+    .map((item: any) => Number(item?.confidence_score))
+    .filter((score) => Number.isFinite(score))
+  const trustScore =
+    scores.length > 0
+      ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
+      : undefined
+
+  citations.forEach((citation, index) => {
+    const verification = verificationList[index] ?? verificationList[0]
+    if (verification?.verification_status && STATUS_MAP[verification.verification_status]) {
+      citation.status = STATUS_MAP[verification.verification_status]
+    }
+  })
+
+  if (trustScore !== undefined && citations.length > 0 && trustScore < 60) {
+    for (const citation of citations) {
+      citation.status = 'error'
+    }
   }
   return { citations: citations.length > 0 ? citations : undefined, trustScore }
 }
