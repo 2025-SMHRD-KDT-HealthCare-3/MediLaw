@@ -1,0 +1,56 @@
+# MediLaw FastAPI 백엔드 — 결정론 테스트 CI
+#
+# 설치 방법(레포 루트에 복사해야 GitHub이 인식함):
+#   mkdir -p /home/user1/MediLaw/.github/workflows && \
+#   cp /home/user1/MediLaw/backend/fastapi/ci/github-actions-fastapi-tests.yml \
+#      /home/user1/MediLaw/.github/workflows/fastapi-tests.yml
+#
+# 실행 대상: OPENAI_API_KEY·SQLite DB(data/medilaw.db) 없이 통과하는 결정론 테스트.
+#   - LLM 통합 테스트: 각 테스트 파일이 키 부재 시 자체 pytest.skip → 자동 skip (6건)
+#   - DB 의존 테스트 6건: -k 로 명시 제외 (data/medilaw.db 는 1.1GB, git 미포함)
+# 시크릿 불필요.
+
+name: fastapi-tests
+
+on:
+  push:
+    paths:
+      - "backend/fastapi/**"
+  pull_request:
+    paths:
+      - "backend/fastapi/**"
+
+jobs:
+  deterministic-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/fastapi
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/fastapi/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Run deterministic tests (no OpenAI key, no DB)
+        # DB(data/medilaw.db) 의존 6건은 -k 로 제외.
+        # (--deselect 는 rootdir(backend/pytest.ini) 기준 nodeid 라 경로 의존적 → -k 사용)
+        # LLM 테스트는 OPENAI_API_KEY 부재 시 테스트 내부 가드로 skip 됨.
+        run: >
+          python -m pytest tests/ -q
+          -k "not test_ad_core_statutes_present
+          and not test_inject_ad_core_only_for_ad
+          and not test_extract_real_vs_fake_statute
+          and not test_summarize_mixed
+          and not test_paragraph_hallucination
+          and not test_chat_citation_check"
