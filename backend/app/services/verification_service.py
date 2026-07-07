@@ -65,7 +65,7 @@ def _build_hms_citations(db: Session, ans_id: int) -> list[dict]:
 
 def _call_hms_verify(answer_text: str | None, citations: list[dict]) -> dict:
     payload = {"citations": citations} if citations else {"text": answer_text or ""}
-    return hms_client.post_json("/v1/verify", payload, timeout=120)
+    return hms_client.post_json("/v1/verify", payload, timeout=hms_client.DEFAULT_TIMEOUT)
 
 
 def verify_answer(db: Session, ans_id: int, current_user: User):
