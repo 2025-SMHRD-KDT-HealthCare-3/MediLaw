@@ -107,3 +107,61 @@ def test_ai_answer_uses_citation_summary_score_when_output_empty(client, monkeyp
     assert data["evidences"][0]["ans_id"] == data["answer_chat"]["chat_id"]
     assert data["verifications"][0]["confidence_score"] == "76.00"
     assert seen_timeouts == [hms_client.DEFAULT_TIMEOUT]
+
+
+def test_ai_answer_uses_source_score_when_citation_summary_has_no_items(client, monkeypatch):
+    def fake_post_json(path: str, payload: dict, *, timeout: int = 120) -> dict:
+        assert timeout == hms_client.DEFAULT_TIMEOUT
+        if path == "/chat":
+            return {
+                "answer": "동의서만으로 손해배상청구가 당연히 불가능해지지는 않습니다.[1][2]",
+                "sources": [
+                    {
+                        "label": "대법원 94다35671",
+                        "source_type": "case",
+                        "trust_grade": "A",
+                        "snippet": "설명의무와 승낙권 침해에 관한 판례입니다.",
+                        "source_url": "https://example.test/case-a",
+                    },
+                    {
+                        "label": "대법원 98다32045",
+                        "source_type": "case",
+                        "trust_grade": "B",
+                        "snippet": "의료과실 및 인과관계에 관한 판례입니다.",
+                        "source_url": "https://example.test/case-b",
+                    },
+                ],
+                "citation_check": {
+                    "output": [],
+                    "summary": {
+                        "total": 0,
+                        "verified": 0,
+                        "failed": 0,
+                        "avg_score": 0,
+                        "min_score": 100,
+                    },
+                },
+            }
+        raise AssertionError(f"unexpected HMS JSON path: {path}")
+
+    monkeypatch.setattr(hms_client, "post_json", fake_post_json)
+
+    token = signup_and_login(client, login_id="source-score-user")
+    headers = {"Authorization": f"Bearer {token}"}
+    room_id = client.post(
+        "/api/rooms",
+        json={"room_title": "AI 상담방"},
+        headers=headers,
+    ).json()["data"]["room_id"]
+
+    response = client.post(
+        f"/api/rooms/{room_id}/ai-answer",
+        json={"question": "동의서에 서명하면 손해배상청구가 불가능한가요?"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert len(data["evidences"]) == 2
+    assert data["verifications"][0]["confidence_score"] == "86.00"
+    assert data["verifications"][0]["verification_status"] == "CONFIRMED"

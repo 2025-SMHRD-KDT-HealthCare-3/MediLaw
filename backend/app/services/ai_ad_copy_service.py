@@ -89,6 +89,8 @@ def _collect_review_sources(hms_response: dict) -> list[dict]:
                 "label": label,
                 "snippet": item.get("snippet") or item.get("segment_text") or item.get("reason"),
                 "source_url": source_url,
+                "source_type": item.get("source_type"),
+                "trust_grade": item.get("trust_grade") or item.get("grade"),
             }
         )
 
@@ -164,6 +166,7 @@ def review_document_and_create(
         )
         verifications = []
         if room_id is not None:
+            review_sources = _collect_review_sources(hms_response)
             user_chat = chat_repository.create(
                 db,
                 room_id,
@@ -187,12 +190,12 @@ def review_document_and_create(
                 db,
                 ai_chat.chat_id,
                 current_user.user_id,
-                hms_verification_output(hms_response.get("citation_check")),
+                hms_verification_output(hms_response.get("citation_check"), review_sources),
             )
             evidences = persist_hms_sources(
                 db,
                 ai_chat.chat_id,
-                _collect_review_sources(hms_response),
+                review_sources,
             )
         else:
             user_chat = None
