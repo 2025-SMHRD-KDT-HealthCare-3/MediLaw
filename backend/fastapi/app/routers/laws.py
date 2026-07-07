@@ -8,6 +8,7 @@
 배치 동기화는 scripts/sync_revisions.py(1일 1회 cron). 미동기화 시 첫 호출에서 라이브 부트스트랩.
 """
 import re
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -47,10 +48,24 @@ def _row_to_rev(r) -> LawRevision:
     )
 
 
+def _latest_synced_at(conn):
+    row = conn.execute("SELECT MAX(synced_at) AS synced_at FROM law_revisions").fetchone()
+    raw = row["synced_at"] if row else None
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def _bootstrap_if_empty(conn):
     """미동기화면 추적 법령을 라이브로 1회 동기화(자기 부트스트랩)."""
     if lawapi.has_revisions(conn):
-        return
+        latest = _latest_synced_at(conn)
+        if latest and datetime.now(timezone.utc) - latest < timedelta(days=1):
+            return
     for name in TRACKED_LAWS:
         try:
             lawapi.sync_law(conn, name)
