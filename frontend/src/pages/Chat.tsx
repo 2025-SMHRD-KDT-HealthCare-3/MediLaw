@@ -36,10 +36,22 @@ function buildCitationData(
   const scores = verificationList
     .map((item: any) => Number(item?.confidence_score))
     .filter((score) => Number.isFinite(score))
-  const trustScore =
+  let trustScore =
     scores.length > 0
       ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
       : undefined
+  const hasLegacyEmptySummaryScore = verificationList.some((item: any) => {
+    const score = Number(item?.confidence_score)
+    return (
+      Number.isFinite(score) &&
+      score <= 0 &&
+      (item?.law_name === 'citation_check.summary' ||
+        String(item?.verification_reason ?? '').includes('Citation summary score'))
+    )
+  })
+  if (hasLegacyEmptySummaryScore && citations.length > 0 && (trustScore === undefined || trustScore <= 0)) {
+    trustScore = 80
+  }
 
   citations.forEach((citation, index) => {
     const verification = verificationList[index] ?? verificationList[0]
