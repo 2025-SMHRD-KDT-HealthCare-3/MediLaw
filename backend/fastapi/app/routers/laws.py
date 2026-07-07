@@ -8,6 +8,7 @@
 배치 동기화는 scripts/sync_revisions.py(1일 1회 cron). 미동기화 시 첫 호출에서 라이브 부트스트랩.
 """
 import re
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -69,7 +70,7 @@ def _bootstrap_if_empty(conn):
     for name in TRACKED_LAWS:
         try:
             lawapi.sync_law(conn, name)
-        except lawapi.LawApiError:
+        except (lawapi.LawApiError, sqlite3.OperationalError):
             continue
 
 
