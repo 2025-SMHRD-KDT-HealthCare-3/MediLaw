@@ -14,9 +14,9 @@
 from __future__ import annotations
 
 import contextvars
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from functools import lru_cache
 
 from app import llm
 from app.db import db, has_embeddings
@@ -60,9 +60,19 @@ _AD_CORE_ARTICLES = [("의료법", "56"), ("의료법", "27"), ("의료법", "57
 _AD_CORE_SNIPPET = 600  # 제56조 경험담(≈340)·제27조 유인(≈537)이 보이도록.
 
 
-@lru_cache(maxsize=1)
+# 핵심조문 캐시 — 영구 lru_cache 대신 1시간 TTL. DB의 법령 개정이 프로세스 재시작 없이
+# 반영되도록 한다. 락 없이 단순하게 유지: 경합 시 최악이 DB 한 번 더 조회(무해).
+_AD_CORE_TTL = 3600.0  # 초
+_AD_CORE_CACHE: tuple | None = None
+_AD_CORE_CACHE_AT: float = 0.0
+
+
 def _ad_core_hits() -> tuple:
-    """의료광고 핵심 금지조문 Hit(프로세스 1회 캐시). DB 문제 시 빈 튜플(graceful)."""
+    """의료광고 핵심 금지조문 Hit(1시간 TTL 캐시). DB 문제 시 빈 튜플(graceful)."""
+    global _AD_CORE_CACHE, _AD_CORE_CACHE_AT
+    if (_AD_CORE_CACHE is not None
+            and time.monotonic() - _AD_CORE_CACHE_AT <= _AD_CORE_TTL):
+        return _AD_CORE_CACHE
     out: list[Hit] = []
     try:
         for law, art in _AD_CORE_ARTICLES:
@@ -85,8 +95,10 @@ def _ad_core_hits() -> tuple:
                 effective_from=row["effective_from"], source_url=row["source_url"] or "",
             ))
     except Exception:  # noqa: BLE001 — DB 문제 시 주입 생략(검색만으로 graceful)
-        return tuple()
-    return tuple(out)
+        return tuple()  # 실패는 캐시하지 않음 — 다음 호출에서 재시도.
+    _AD_CORE_CACHE = tuple(out)
+    _AD_CORE_CACHE_AT = time.monotonic()
+    return _AD_CORE_CACHE
 
 
 def _inject_ad_core(segments: list[Segment], per_segment: list[list]) -> None:
@@ -134,13 +146,26 @@ _SYSTEM_BASE = (
     "[근거](법령·판례·가이드라인)가 함께 붙어 있습니다.\n"
     "규칙:\n"
     "1. 각 세그먼트를 그 아래 [근거]에만 비추어 판단하세요. 근거 없는 추측은 금지합니다.\n"
-    "2. level 은 none/low/med/high 중 하나. 위반·과장·오해소지가 없으면 none.\n"
-    "3. 근거(법령 번호·인용)는 시스템이 자동으로 연결합니다. 당신은 근거 번호나 법령명을 만들지 말고, "
+    "2. level 은 none/low/med/high 중 하나. 위반·과장·오해소지가 없으면 none. 판정은 보수적으로 하세요: "
+    "그 세그먼트가 '완결된 주장·표현으로서 실제로 위반'일 때만 위험으로 올리고, 그 자체로는 구체적 주장을 "
+    "담지 않는 텍스트 — 단독으로 쓰인 상호·기관·브랜드명, 로고·배지·도장에 들어가는 장식성 단어나 "
+    "표식(문장이 아니라 단어가 단독/나열된 형태), 날짜·시간·연락처·주소·번호 등 — 은 그 자체로 위반이 "
+    "아니면 none 으로 두세요.\n"
+    "3. 하나의 위반이 OCR 등으로 여러 세그먼트에 조각나 흩어져 있으면, 위반의 '핵심이 되는 대표 세그먼트 "
+    "하나'에만 위험판정과 수정을 집중하고, 나머지 부수 조각은 none 으로 두어 같은 위반을 여러 번 지적하지 "
+    "마세요. 문서 전체 맥락을 보고 무엇이 핵심 위반 문구인지 먼저 판단하세요.\n"
+    "4. 근거(법령 번호·인용)는 시스템이 자동으로 연결합니다. 당신은 근거 번호나 법령명을 만들지 말고, "
     "reason 본문에 근거 내용을 자연어로 녹여 설명만 하세요.\n"
-    "4. after 는 그 세그먼트를 '그대로 대체할' 실제 수정 문구만 쓰세요(지시·설명·따옴표 없이 "
-    "문서에 바로 넣을 문장 자체). level 이 none 이면 after 는 빈 문자열로 두세요.\n"
-    '5. 반드시 다음 JSON 형식으로만 응답: {"results":[{"index":0,"level":"high",'
-    '"reason":"...","after":"..."}]}. results 에는 모든 세그먼트(index 0..N-1)를 포함하세요.'
+    "5. after 는 before(원문)를 '최소한으로' 고친, 그 세그먼트에 '고유한' 대체 문구를 쓰세요"
+    "(지시·설명·따옴표 없이 문서에 바로 넣을 문장 자체). 위반 표현만 덜어내거나 사실 기반의 중립 표현으로 "
+    "바꾸고, 위반과 무관한 부분은 원문 그대로 유지하세요. 여러 세그먼트에 동일하거나 사실상 같은 문구를 "
+    "반복하지 말고(모든 항목을 하나의 상투적 문구로 채우는 것 금지), 각 after 는 그 세그먼트의 원문 내용을 "
+    "반영해 서로 달라야 합니다. 객관적 근거 없이 우월성·순위·수상·배타성을 주장하는 표현(예: 최상급·유일·"
+    "최초·비교우위)처럼 합법적 순화가 불가능한 경우에는 그럴듯한 문구를 지어내지 말고, 위반 부분을 삭제한 "
+    "나머지 사실 정보만 남기세요. level 이 none 이면 after 는 빈 문자열로 두세요.\n"
+    '6. 반드시 다음 JSON 형식으로만 응답: {"results":[{"index":0,"level":"high",'
+    '"reason":"...","after":"..."}]}. results 에는 모든 세그먼트(index 0..N-1)를 포함하되, '
+    '위반이 아닌 세그먼트는 level=none, after="" 로 두세요.'
 )
 
 

@@ -25,7 +25,7 @@ const STATUS_COLOR: Record<string, string> = {
   na: '#6B7280',
 }
 const CENTER_COLOR = '#374151'
-const PAD = 18
+const PAD = 12
 
 function spreadX(k: number, pad = PAD): number[] {
   if (k <= 0) return []
@@ -104,7 +104,7 @@ export default function AdReviewGraph({
     const nodes: PNode[] = []
     const edges: PEdge[] = []
     // 위쪽 가지의 잎은 가지 위로(작은 y), 아래쪽 가지의 잎은 가지 아래로(큰 y) 세로로 쌓는다.
-    const Y = { center: 50, topFind: 31, topLeaf: [17, 4], botFind: 69, botLeaf: [83, 96] }
+    const Y = { center: 50, topFind: 29, topLeaf: [15, 4], botFind: 71, botLeaf: [85, 96] }
 
     const snippet = inputSnippet
       ? `"${inputSnippet.slice(0, 22).trim()}${inputSnippet.length > 22 ? '…' : ''}"`
@@ -159,7 +159,7 @@ export default function AdReviewGraph({
   }, [items, inputSnippet, centerLabel, emptyLabel, statusLabels])
 
   return (
-    <div className="relative w-full overflow-hidden rounded-xl border border-gray-200 bg-white" style={{ height: 600 }}>
+    <div className="relative w-full overflow-hidden rounded-xl border border-gray-200 bg-white" style={{ height: 720 }}>
       <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
         {edges.map((e) => (
           <line key={e.key} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke={e.color} strokeOpacity={e.opacity} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
@@ -172,7 +172,7 @@ export default function AdReviewGraph({
 
         if (nd.kind === 'center') {
           return (
-            <div key={nd.key} className={`${base} max-w-[200px] rounded-lg px-4 py-2`} style={{ ...pos, backgroundColor: nd.color }} title={nd.title}>
+            <div key={nd.key} className={`${base} max-w-[260px] rounded-lg px-5 py-3`} style={{ ...pos, backgroundColor: nd.color }} title={nd.title}>
               <span className="block text-sm font-bold text-white">{nd.label}</span>
               {nd.sub && <span className="mt-0.5 block truncate text-[11px] text-white/70">{nd.sub}</span>}
             </div>
@@ -181,15 +181,15 @@ export default function AdReviewGraph({
 
         if (nd.kind === 'finding') {
           return (
-            <div key={nd.key} className={`${base} max-w-[170px] rounded-lg px-3 py-2`} style={{ ...pos, backgroundColor: nd.color }} title={nd.title}>
+            <div key={nd.key} className={`${base} max-w-[230px] rounded-lg px-4 py-3`} style={{ ...pos, backgroundColor: nd.color }} title={nd.title}>
               <span className="line-clamp-2 block text-xs font-semibold leading-snug text-white">{nd.label}</span>
               {nd.sub && <span className="mt-0.5 block text-[10px] font-medium text-white/85">{nd.sub}</span>}
             </div>
           )
         }
 
-        const leafCls = `${base} max-w-[150px] rounded-md px-2.5 py-1`
-        const inner = <span className="block truncate text-[11px] font-medium text-white">{nd.label}</span>
+        const leafCls = `${base} max-w-[210px] rounded-md px-3 py-1.5`
+        const inner = <span className="line-clamp-2 block text-[11px] font-medium leading-snug text-white">{nd.label}</span>
         return nd.href ? (
           <a key={nd.key} href={nd.href} target="_blank" rel="noreferrer" className={`${leafCls} hover:brightness-110`} style={{ ...pos, backgroundColor: nd.color, opacity: 0.92 }} title={nd.title}>
             {inner}

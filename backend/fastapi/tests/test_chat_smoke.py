@@ -88,9 +88,10 @@ def test_multiturn_rewrite():
 # ── 3) 영어 입력 — 영어 답변 + 공식 영문 법령 출처 ────────────────────────────
 def test_english_input():
     _skip_if_no_key()
-    r = chat.chat(ChatRequest(
+    # 영어는 전용 엔드포인트 chat_en 사용(기존 chat 은 한국어 전용, lang="ko" 고정).
+    r = chat.chat_en(ChatRequest(
         question="What is the penalty for unlicensed medical practice?",
-        lang="en", top_k=4))
+        top_k=4))
 
     assert r.lang == "en", f"lang={r.lang!r}, expected 'en'"
 

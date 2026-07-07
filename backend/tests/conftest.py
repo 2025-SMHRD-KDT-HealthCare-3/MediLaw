@@ -128,7 +128,7 @@ def mock_hms(monkeypatch):
         files: dict | None = None,
         timeout: int = 180,
     ) -> dict:
-        assert path == "/documents/review"
+        assert path in {"/documents/review", "/documents/review/en"}
         original_text = (data or {}).get("text") or "uploaded.pdf"
         return {
             "original_text": original_text,

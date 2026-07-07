@@ -12,6 +12,7 @@ import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.auth import require_api_key
 from app.pdf import geometry, review, routing
@@ -52,7 +53,9 @@ async def review(
         raise HTTPException(400, "file(PDF) 또는 text 중 하나를 제공하세요.")
     top_k = max(1, min(8, top_k_per_segment))
     try:
-        return review_to_response(
+        # 무거운 동기 작업(PDF 파싱·OCR·LLM·임베딩)이라 스레드풀로 넘겨 이벤트루프 블로킹 방지.
+        return await run_in_threadpool(
+            review_to_response,
             pdf_bytes=pdf_bytes, text=text, as_of=as_of, top_k=top_k, lang=lang)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
@@ -85,7 +88,9 @@ async def review_en(
         raise HTTPException(400, "file(PDF) 또는 text 중 하나를 제공하세요.")
     top_k = max(1, min(8, top_k_per_segment))
     try:
-        return review_to_response(
+        # 무거운 동기 작업(PDF 파싱·OCR·LLM·임베딩)이라 스레드풀로 넘겨 이벤트루프 블로킹 방지.
+        return await run_in_threadpool(
+            review_to_response,
             pdf_bytes=pdf_bytes, text=text, as_of=as_of, top_k=top_k,
             lang="en", suggestion_lang="en")
     except ValueError as e:
