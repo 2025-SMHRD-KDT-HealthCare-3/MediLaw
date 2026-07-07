@@ -1,0 +1,254 @@
+{
+  "version": 1,
+  "description": "MediLaw RAG 검색 품질 골든셋. 모든 expected 근거는 data/medilaw.db 코퍼스에 실재함을 검증했다(2026-07 기준). expected는 '이 중 하나라도 top-k에 나오면 정답' 목록.",
+  "questions": [
+    {
+      "id": "med-01",
+      "domain": "의료법",
+      "question": "의사 면허가 없는 사람이 문신 시술이나 미용 시술을 하면 어떤 법 위반인가요?",
+      "expected": [
+        {"type": "statute", "law": "의료법", "article": "27"},
+        {"type": "case", "label_contains": "부정의료업자"},
+        {"type": "case", "label_contains": "무면허의료행위"}
+      ]
+    },
+    {
+      "id": "med-02",
+      "domain": "의료법",
+      "question": "병원이 환자의 치료 경험담이나 치료 전후 사진을 광고에 사용해도 되나요?",
+      "expected": [
+        {"type": "statute", "law": "의료법", "article": "56"},
+        {"type": "doc", "doc_type": "guideline", "title_contains": "의료광고 가이드라인"}
+      ]
+    },
+    {
+      "id": "med-03",
+      "domain": "의료법",
+      "question": "환자를 병원에 소개해 주고 그 대가로 금품을 받는 환자 유인·알선 행위는 불법인가요?",
+      "expected": [
+        {"type": "statute", "law": "의료법", "article": "27"},
+        {"type": "doc", "doc_type": "interpretation", "title_contains": "제27조제3항"}
+      ]
+    },
+    {
+      "id": "med-04",
+      "domain": "의료법",
+      "question": "진료기록부와 수술기록은 각각 몇 년 동안 보존해야 하나요?",
+      "expected": [
+        {"type": "statute", "law": "의료법 시행규칙", "article": "15"},
+        {"type": "statute", "law": "의료법", "article": "22"}
+      ]
+    },
+    {
+      "id": "med-05",
+      "domain": "의료법",
+      "question": "의사가 환자를 직접 대면하지 않고 전화나 화상으로 진료하는 비대면진료는 허용되나요?",
+      "expected": [
+        {"type": "statute", "law": "의료법", "article": "34"},
+        {"type": "statute", "law": "의료법", "article": "34의2"},
+        {"type": "statute", "law": "의료법", "article": "34의3"}
+      ]
+    },
+    {
+      "id": "med-06",
+      "domain": "의료법",
+      "question": "의원급 의료기관이 간판에 '병원'이라는 명칭을 사용할 수 있나요?",
+      "expected": [
+        {"type": "statute", "law": "의료법", "article": "42"},
+        {"type": "statute", "law": "의료법 시행규칙", "article": "40"}
+      ]
+    },
+    {
+      "id": "med-07",
+      "domain": "의료법",
+      "question": "의료인이 진료 과정에서 알게 된 환자의 비밀을 다른 사람에게 누설하면 어떻게 되나요?",
+      "expected": [
+        {"type": "statute", "law": "의료법", "article": "19"},
+        {"type": "statute", "law": "의료법", "article": "21"}
+      ]
+    },
+    {
+      "id": "pipa-01",
+      "domain": "개인정보 보호법",
+      "question": "환자의 진료정보를 가명처리하면 정보주체 동의 없이 연구 목적으로 활용할 수 있나요?",
+      "expected": [
+        {"type": "statute", "law": "개인정보 보호법", "article": "28의2"},
+        {"type": "doc", "doc_type": "decision", "title_contains": "가명정보 제공"},
+        {"type": "doc", "doc_type": "interpretation", "title_contains": "가명처리된 질병정보"}
+      ]
+    },
+    {
+      "id": "pipa-02",
+      "domain": "개인정보 보호법",
+      "question": "건강상태나 진료기록 같은 민감정보는 어떤 요건을 갖춰야 처리할 수 있나요?",
+      "expected": [
+        {"type": "statute", "law": "개인정보 보호법", "article": "23"}
+      ]
+    },
+    {
+      "id": "pipa-03",
+      "domain": "개인정보 보호법",
+      "question": "병원 대기실 같은 공개된 장소에 CCTV를 설치·운영하려면 어떤 요건을 지켜야 하나요?",
+      "expected": [
+        {"type": "statute", "law": "개인정보 보호법", "article": "25"},
+        {"type": "statute", "law": "개인정보 보호법 시행령", "article": "22"},
+        {"type": "statute", "law": "개인정보 보호법 시행령", "article": "25"}
+      ]
+    },
+    {
+      "id": "pipa-04",
+      "domain": "개인정보 보호법",
+      "question": "개인정보 수집·이용 동의는 어떤 방법으로 받아야 유효한가요?",
+      "expected": [
+        {"type": "statute", "law": "개인정보 보호법", "article": "22"},
+        {"type": "statute", "law": "개인정보 보호법", "article": "15"}
+      ]
+    },
+    {
+      "id": "pipa-05",
+      "domain": "개인정보 보호법",
+      "question": "개인정보가 유출되었을 때 언제까지 누구에게 통지하고 신고해야 하나요?",
+      "expected": [
+        {"type": "statute", "law": "개인정보 보호법", "article": "34"}
+      ]
+    },
+    {
+      "id": "pipa-06",
+      "domain": "개인정보 보호법",
+      "question": "보유기간이 지나 더 이상 필요 없어진 개인정보는 언제 어떻게 파기해야 하나요?",
+      "expected": [
+        {"type": "statute", "law": "개인정보 보호법", "article": "21"}
+      ]
+    },
+    {
+      "id": "pipa-07",
+      "domain": "개인정보 보호법",
+      "question": "법령상 근거 없이 주민등록번호를 수집하거나 처리할 수 있나요?",
+      "expected": [
+        {"type": "statute", "law": "개인정보 보호법", "article": "24의2"},
+        {"type": "statute", "law": "개인정보 보호법", "article": "24"},
+        {"type": "statute", "law": "정보통신망 이용촉진 및 정보보호 등에 관한 법률", "article": "23의2"}
+      ]
+    },
+    {
+      "id": "pipa-08",
+      "domain": "개인정보 보호법",
+      "question": "수집한 개인정보를 제3자에게 제공하려면 어떤 요건을 갖춰야 하나요?",
+      "expected": [
+        {"type": "statute", "law": "개인정보 보호법", "article": "17"},
+        {"type": "statute", "law": "개인정보 보호법", "article": "18"}
+      ]
+    },
+    {
+      "id": "bio-01",
+      "domain": "생명윤리법",
+      "question": "사람을 대상으로 하는 연구를 수행하려면 연구대상자에게 어떤 동의를 받아야 하나요?",
+      "expected": [
+        {"type": "statute", "law": "생명윤리 및 안전에 관한 법률", "article": "16"}
+      ]
+    },
+    {
+      "id": "bio-02",
+      "domain": "생명윤리법",
+      "question": "기관생명윤리위원회(IRB)는 어떤 기관에 설치해야 하고 어떤 업무를 수행하나요?",
+      "expected": [
+        {"type": "statute", "law": "생명윤리 및 안전에 관한 법률", "article": "10"}
+      ]
+    },
+    {
+      "id": "bio-03",
+      "domain": "생명윤리법",
+      "question": "의료기관이 아닌 유전자검사기관이 질병의 진단 목적 유전자검사를 할 수 있나요?",
+      "expected": [
+        {"type": "statute", "law": "생명윤리 및 안전에 관한 법률", "article": "50"},
+        {"type": "statute", "law": "생명윤리 및 안전에 관한 법률", "article": "49"},
+        {"type": "doc", "doc_type": "guideline", "title_contains": "DTC 유전자검사 가이드라인"}
+      ]
+    },
+    {
+      "id": "bio-04",
+      "domain": "생명윤리법",
+      "question": "유전자검사를 받을 때 검사대상자의 동의는 어떻게 받아야 하나요?",
+      "expected": [
+        {"type": "statute", "law": "생명윤리 및 안전에 관한 법률", "article": "51"}
+      ]
+    },
+    {
+      "id": "bio-05",
+      "domain": "생명윤리법",
+      "question": "체외수정으로 생성된 배아는 최대 몇 년까지 보존할 수 있나요?",
+      "expected": [
+        {"type": "statute", "law": "생명윤리 및 안전에 관한 법률", "article": "25"},
+        {"type": "statute", "law": "생명윤리 및 안전에 관한 법률 시행규칙", "article": "21"},
+        {"type": "doc", "doc_type": "interpretation", "title_contains": "배아의 보존기간"}
+      ]
+    },
+    {
+      "id": "net-01",
+      "domain": "정보통신망법",
+      "question": "정당한 접근권한 없이 타인의 정보통신망에 침입하면 어떤 법 위반인가요?",
+      "expected": [
+        {"type": "statute", "law": "정보통신망 이용촉진 및 정보보호 등에 관한 법률", "article": "48"}
+      ]
+    },
+    {
+      "id": "net-02",
+      "domain": "정보통신망법",
+      "question": "영리 목적의 광고성 문자나 이메일을 보내려면 수신자의 사전 동의가 필요한가요?",
+      "expected": [
+        {"type": "statute", "law": "정보통신망 이용촉진 및 정보보호 등에 관한 법률", "article": "50"}
+      ]
+    },
+    {
+      "id": "net-03",
+      "domain": "정보통신망법",
+      "question": "해킹 등 침해사고가 발생한 정보통신서비스 제공자는 어디에 신고해야 하나요?",
+      "expected": [
+        {"type": "statute", "law": "정보통신망 이용촉진 및 정보보호 등에 관한 법률", "article": "48의3"},
+        {"type": "statute", "law": "정보통신망 이용촉진 및 정보보호 등에 관한 법률", "article": "48의2"}
+      ]
+    },
+    {
+      "id": "new-01",
+      "domain": "신규 코퍼스",
+      "question": "병원 접수창구나 진료 과정에서 환자 개인정보를 다룰 때 참고할 수 있는 보건복지부 가이드라인이 있나요?",
+      "expected": [
+        {"type": "doc", "doc_type": "guideline", "title_contains": "의료기관 개인정보보호"}
+      ]
+    },
+    {
+      "id": "new-02",
+      "domain": "신규 코퍼스",
+      "question": "약국에 설치된 원격화상투약기를 이용해서 일반의약품을 판매할 수 있나요?",
+      "expected": [
+        {"type": "doc", "doc_type": "interpretation", "title_contains": "화상투약기"}
+      ]
+    },
+    {
+      "id": "new-03",
+      "domain": "신규 코퍼스",
+      "question": "의료인 단체가 통계작성을 위해 의료기관이 보유한 가명정보의 제공을 요청할 수 있나요?",
+      "expected": [
+        {"type": "doc", "doc_type": "decision", "title_contains": "가명정보 제공"},
+        {"type": "statute", "law": "개인정보 보호법", "article": "28의2"}
+      ]
+    },
+    {
+      "id": "new-04",
+      "domain": "신규 코퍼스",
+      "question": "병원이 감염병 확산 차단을 위해 방문자의 주민등록번호를 수집·처리할 수 있나요?",
+      "expected": [
+        {"type": "doc", "doc_type": "decision", "title_contains": "주민등록번호 처리"},
+        {"type": "statute", "law": "개인정보 보호법", "article": "24의2"}
+      ]
+    },
+    {
+      "id": "new-05",
+      "domain": "신규 코퍼스",
+      "question": "의료분야 개인정보 보호조치에 대해 개인정보보호위원회가 개선을 권고한 사례가 있나요?",
+      "expected": [
+        {"type": "doc", "doc_type": "decision", "title_contains": "의료분야 개인정보 보호조치"}
+      ]
+    }
+  ]
+}
