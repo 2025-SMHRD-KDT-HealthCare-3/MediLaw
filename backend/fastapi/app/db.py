@@ -25,8 +25,21 @@ def get_conn() -> sqlite3.Connection:
     global _VEC_LOADED
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+    except sqlite3.OperationalError:
+        # Windows/Docker bind mounts can reject WAL sidecar files. The DB is
+        # read-mostly at runtime, so keep the connection usable with SQLite's
+        # current journal mode instead of failing every request.
+        conn.close()
+        conn = sqlite3.connect(
+            f"file:{DB_PATH}?mode=ro&immutable=1",
+            uri=True,
+            check_same_thread=False,
+        )
+        conn.row_factory = sqlite3.Row
     loaded = _load_vec(conn)
     # 첫 커넥션 생성 시점의 로드 결과를 모듈 전역에 기록(이후 vec_loaded()가 반환).
     # 읽기전용·동일 DB라 스레드마다 결과가 같아 전역값으로 충분.
