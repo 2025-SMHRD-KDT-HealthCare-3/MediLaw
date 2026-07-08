@@ -18,13 +18,25 @@ const STATUS_MAP: Record<string, CitationStatus> = {
 // 근거(evidences)·검증(verifications) → 화면용 citations/trustScore 변환.
 // 라이브 응답(handleSend)과 대화 복원(mapChats)에서 동일하게 사용해, 새로고침·방
 // 재진입 후에도 근거 법령 카드와 신뢰도 점수가 동일하게 나오도록 한다.
+// answerText: 답변 본문. 본문에 실제 인용된 [n]에 해당하는 근거만 카드로 노출한다.
+//   ※ n ↔ evidences 매핑 근거: FastAPI가 sources에 n=1부터 배열 순서대로 부여하고
+//     (routers/chat.py: enumerate(hits, 1)), Product API가 그 순서 그대로 evidence를
+//     저장·반환(persist_hms_sources 순회 / get_list는 created_at·evidence_id 오름차순)
+//     하므로, 프론트가 받는 evidences[i]가 곧 [i+1] 인용이다.
 function buildCitationData(
   evidences: any[] | undefined,
   verifications: any[] | undefined,
+  answerText: string,
 ): { citations?: Citation[]; trustScore?: number } {
   const verificationList = verifications ?? []
-  const citations: Citation[] = (evidences ?? []).map((ev: any) => ({
+  // 본문에 실제 인용된 [n] 집합 — 카드 필터와 신뢰점수 산정이 같은 집합을 공유해
+  // '보이는 카드'와 점수 산정 근거가 절대 어긋나지 않게 한다.
+  const citedNos = new Set(
+    Array.from(String(answerText ?? '').matchAll(/\[(\d+)\]/g), (m) => Number(m[1])),
+  )
+  const citations: Citation[] = (evidences ?? []).map((ev: any, index: number) => ({
     id: String(ev.evidence_id),
+    no: index + 1, // 원래 인용 번호 [n] — 아래 cited-only 필터 전에 부여해 번호 보존
     lawName: ev.article_no ? `${ev.law_name} ${ev.article_no}` : ev.law_name,
     clause: (ev.core_basis ?? '')
       .replace(/^#.*$/gm, '')
@@ -33,8 +45,14 @@ function buildCitationData(
     status: 'verified' as CitationStatus,
     sourceUrl: ev.source_url ?? undefined,
   }))
-  const scores = verificationList
-    .map((item: any) => Number(item?.confidence_score))
+  // 신뢰점수 = '인용되어 실제로 보이는 카드'들의 검증 점수 평균.
+  // 카드의 status/reason과 동일한 인덱스 매칭(verificationList[index] ?? [0] 폴백)을 사용해
+  // 점수 산정 대상과 카드 목록이 항상 일치하도록 한다. (기존: 검색된 8건 전체 평균)
+  const citedIndexes = citations
+    .map((_, index) => index)
+    .filter((index) => citedNos.has(index + 1))
+  const scores = citedIndexes
+    .map((index) => Number((verificationList[index] ?? verificationList[0])?.confidence_score))
     .filter((score) => Number.isFinite(score))
   let trustScore =
     scores.length > 0
@@ -49,7 +67,8 @@ function buildCitationData(
         String(item?.verification_reason ?? '').includes('Citation summary score'))
     )
   })
-  if (hasLegacyEmptySummaryScore && citations.length > 0 && (trustScore === undefined || trustScore <= 0)) {
+  // 레거시 폴백도 '보이는 카드' 기준으로 판정 (카드 없는데 점수만 뜨는 일 방지)
+  if (hasLegacyEmptySummaryScore && citedIndexes.length > 0 && (trustScore === undefined || trustScore <= 0)) {
     trustScore = 80
   }
 
@@ -58,6 +77,9 @@ function buildCitationData(
     if (verification?.verification_status && STATUS_MAP[verification.verification_status]) {
       citation.status = STATUS_MAP[verification.verification_status]
     }
+    // 검증 사유(verification_reason)도 카드 상세 패널에 노출 (없으면 고정 문구 폴백)
+    const reason = String(verification?.verification_reason ?? '').trim()
+    if (reason) citation.reason = reason
   })
 
   if (trustScore !== undefined && citations.length > 0 && trustScore < 60) {
@@ -65,7 +87,12 @@ function buildCitationData(
       citation.status = 'error'
     }
   }
-  return { citations: citations.length > 0 ? citations : undefined, trustScore }
+
+  // 본문에 실제 인용된 [n]만 남긴다 (n = evidences 1-based 순번, 위 주석 참고).
+  // 검증(status·reason)은 원래 인덱스로 이미 매칭을 끝냈으므로 여기서 걸러도 안전.
+  // [n] 토큰이 하나도 없는 답변(거절·범위 밖 등)은 근거 목록 자체를 숨긴다.
+  const citedOnly = citations.filter((_, index) => citedNos.has(index + 1))
+  return { citations: citedOnly.length > 0 ? citedOnly : undefined, trustScore }
 }
 
 interface RoomItem {
@@ -109,7 +136,7 @@ export default function Chat() {
       }
       // AI 답변이면 저장된 근거·검증으로 카드·점수 복원 (라이브 응답과 동일하게).
       if (c.speaker_type !== 'USER') {
-        const { citations, trustScore } = buildCitationData(c.evidences, c.verifications)
+        const { citations, trustScore } = buildCitationData(c.evidences, c.verifications, c.chat_text)
         msg.citations = citations
         msg.trustScore = trustScore
       }
@@ -241,7 +268,11 @@ export default function Chat() {
       const res = await askAi(activeId, question, lang)
       const data = res.data
       const answer = data?.answer_chat
-      const { citations, trustScore } = buildCitationData(data?.evidences, data?.verifications)
+      const { citations, trustScore } = buildCitationData(
+        data?.evidences,
+        data?.verifications,
+        answer?.chat_text ?? '',
+      )
 
       addMessage({
         id: String(answer?.chat_id ?? Date.now()),

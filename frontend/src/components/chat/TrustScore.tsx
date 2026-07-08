@@ -35,8 +35,8 @@ export default function TrustScore({ score }: TrustScoreProps) {
         />
       </svg>
       <div className="flex flex-col leading-tight">
-        <span className="text-sm font-bold" style={{ color }}>{score}</span>
-        <span className="text-[10px] text-gray-500">{t('trust.label')} {label}</span>
+        <span className="text-base font-bold" style={{ color }}>{score}</span>
+        <span className="text-[11px] text-gray-500">{t('trust.label')} {label}</span>
       </div>
     </div>
   );

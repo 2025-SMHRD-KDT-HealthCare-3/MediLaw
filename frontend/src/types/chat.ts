@@ -6,9 +6,11 @@ export type CitationStatus = 'verified' | 'caution' | 'error';
 // 답변이 인용한 법령 1건의 정보
 export interface Citation {
   id: string;
+  no?: number;            // 답변 본문의 인용 번호 [n] (evidences 원래 1-based 순번)
   lawName: string;        // 예: "의료법 제56조"
   clause: string;         // 인용된 조문 내용
   status: CitationStatus; // 확인 / 주의 / 오류
+  reason?: string;        // 검증 사유 (백엔드 verification_reason, 있을 경우)
   sourceUrl?: string;     // 원문 링크 (있을 경우)
 }
 

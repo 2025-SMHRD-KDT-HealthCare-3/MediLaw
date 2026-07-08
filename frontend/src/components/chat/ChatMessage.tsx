@@ -1,6 +1,7 @@
 // src/components/chat/ChatMessage.tsx
+import { useState } from 'react';
 import type { ReactNode } from 'react';
-import type { ChatMessage as ChatMessageType } from '../../types/chat';
+import type { ChatMessage as ChatMessageType, Citation, CitationStatus } from '../../types/chat';
 import CitationBadge from './CitationBadge';
 import TrustScore from './TrustScore';
 import { useLang } from '../../i18n/LanguageContext';
@@ -63,8 +64,120 @@ function MarkdownLite({ text }: { text: string }) {
   return <div className="space-y-2">{blocks}</div>;
 }
 
+// ── 근거 법령 목록(접이식) ────────────────────────────────────────────────────
+// 기본은 접힌 상태(카드 8개가 항상 펼쳐져 있으면 답변이 묻힘).
+//   1단계: 헤더(근거 N개) 클릭 → 목록 펼침/접힘
+//   2단계: 카드 클릭 → 카드 아래 상세 패널(조문 전문 + 상태 설명 + 원문 보기)
+// 원문(새 탭) 이동은 상세 패널의 '원문 보기 →' 링크로만 일어난다.
+// ※ 상태별 설명 문구는 i18n strings.ts 수정이 범위 밖이라 로컬에 둔다.
+const statusNote: Record<'ko' | 'en', Record<CitationStatus, string>> = {
+  ko: {
+    verified: '코퍼스와 일치 확인됨',
+    caution: '일부 불일치·확인 필요',
+    error: '근거 불일치 가능성',
+  },
+  en: {
+    verified: 'Matched against the law corpus',
+    caution: 'Partial mismatch — needs review',
+    error: 'Possible mismatch with the source',
+  },
+};
+
+function EvidenceList({ citations }: { citations: Citation[] }) {
+  const { t, lang } = useLang();
+  const locale: 'ko' | 'en' = lang === 'en' ? 'en' : 'ko';
+  const [open, setOpen] = useState(false);          // 목록 전체 펼침 여부 (기본: 접힘)
+  const [expandedId, setExpandedId] = useState<string | null>(null); // 상세가 열린 카드 id
+
+  return (
+    <div className="min-w-0 flex-1 space-y-1.5">
+      {/* 헤더: 근거 N개 + 셰브런 토글 */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 text-left text-xs font-semibold text-gray-500 transition hover:text-navy"
+      >
+        <span
+          className={`inline-block text-[10px] transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+        >
+          ▸
+        </span>
+        {t('chat.evidenceLabel')}
+        {locale === 'ko' ? ` ${citations.length}개` : ` (${citations.length})`}
+      </button>
+
+      {open &&
+        citations.map((c) => {
+          const clause = (c.clause ?? '').trim();
+          const expanded = expandedId === c.id;
+          return (
+            <div
+              key={c.id}
+              className={`rounded-lg border bg-gray-50 transition ${
+                expanded ? 'border-aqua bg-white' : 'border-gray-200 hover:border-aqua hover:bg-white'
+              }`}
+            >
+              {/* 카드(요약 줄) — 클릭하면 상세 패널 토글. 바로 이동하지 않는다. */}
+              <button
+                type="button"
+                onClick={() => setExpandedId(expanded ? null : c.id)}
+                aria-expanded={expanded}
+                className="block w-full px-3 py-1.5 text-left"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-navy">
+                    {/* 답변 본문의 [n]과 카드를 대조할 수 있게 원래 인용 번호를 앞에 표시 */}
+                    {c.no !== undefined && (
+                      <span className="mr-1 font-mono text-xs text-aqua">[{c.no}]</span>
+                    )}
+                    {c.lawName}
+                  </span>
+                  <CitationBadge status={c.status} />
+                </div>
+                {clause && !expanded && (
+                  <p className="mt-0.5 truncate text-xs leading-relaxed text-gray-500">
+                    {clause}
+                  </p>
+                )}
+              </button>
+
+              {/* 상세 패널: 조문 전문 + 상태 설명 + 원문 보기 */}
+              {expanded && (
+                <div className="space-y-2 border-t border-gray-100 px-3 py-2">
+                  {clause && (
+                    <p className="whitespace-pre-line text-xs leading-relaxed text-gray-600">
+                      {clause}
+                    </p>
+                  )}
+                  {/* 검증 사유: 백엔드가 준 실제 사유(reason) 우선, 없으면 상태별 고정 문구 */}
+                  <div className="flex items-start gap-2">
+                    <CitationBadge status={c.status} />
+                    <span className="text-xs text-gray-500">
+                      {(c.reason ?? '').trim() || statusNote[locale][c.status]}
+                    </span>
+                  </div>
+                  {c.sourceUrl && (
+                    <a
+                      href={c.sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-aqua transition hover:underline"
+                    >
+                      {locale === 'ko' ? '원문 보기' : 'View source'} →
+                    </a>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+    </div>
+  );
+}
+
 export default function ChatMessage({ message }: ChatMessageProps) {
-  const { t } = useLang();
   const isUser = message.role === 'user';
 
   // 1) 사용자 질문 → 오른쪽, navy 말풍선
@@ -88,8 +201,8 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           <MarkdownLite text={message.content} />
         </div>
 
-        {/* 신뢰도(좌) + 근거 법령(우) — 한 줄 배치. 카드는 컴팩트(한 줄 요약)하고,
-            클릭하면 원문(법령·판례 등)이 새 탭으로 열린다. */}
+        {/* 신뢰도(좌) + 근거 법령(우) — 한 줄 배치. 근거 목록은 접이식이며,
+            카드 클릭 → 상세 패널, 원문 이동은 상세의 '원문 보기 →' 링크로만. */}
         {(message.trustScore !== undefined || hasEvidence) && (
           <div className="flex gap-3">
             {message.trustScore !== undefined && (
@@ -98,48 +211,7 @@ export default function ChatMessage({ message }: ChatMessageProps) {
               </div>
             )}
 
-            {hasEvidence && (
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <p className="text-xs font-semibold text-gray-500">{t('chat.evidenceLabel')}</p>
-                {message.citations!.map((c) => {
-                  const clause = (c.clause ?? '').trim()
-                  const inner = (
-                    <>
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-navy">
-                          {c.lawName}
-                          {c.sourceUrl && <span className="ml-1 text-[10px] text-aqua">↗</span>}
-                        </span>
-                        <CitationBadge status={c.status} />
-                      </div>
-                      {clause && (
-                        <p className="mt-0.5 truncate text-[11px] leading-relaxed text-gray-500">
-                          {clause}
-                        </p>
-                      )}
-                    </>
-                  )
-                  return c.sourceUrl ? (
-                    <a
-                      key={c.id}
-                      href={c.sourceUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 transition hover:border-aqua hover:bg-white"
-                    >
-                      {inner}
-                    </a>
-                  ) : (
-                    <div
-                      key={c.id}
-                      className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5"
-                    >
-                      {inner}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+            {hasEvidence && <EvidenceList citations={message.citations!} />}
           </div>
         )}
       </div>
