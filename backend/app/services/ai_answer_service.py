@@ -1,4 +1,5 @@
 import logging
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -24,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 HISTORY_LIMIT = 10
 AI_FAILURE_MESSAGE = "\ud604\uc7ac AI \ub2f5\ubcc0 \uc0dd\uc131\uc5d0 \uc2e4\ud328\ud588\uc2b5\ub2c8\ub2e4. \uc7a0\uc2dc \ud6c4 \ub2e4\uc2dc \uc2dc\ub3c4\ud574 \uc8fc\uc138\uc694."
+SOURCE_TRUST_SCORES = {
+    "A": 90,
+    "B": 82,
+    "C": 72,
+    "D": 62,
+}
 
 
 def _chat_to_hms_turn(chat: Chat) -> dict | None:
@@ -56,7 +63,7 @@ def _call_hms_chat(question: str, history: list[dict], lang: str = "ko") -> dict
     data = hms_client.post_json(
         path,
         {"question": question, "history": history, "top_k": 8, "lang": "en" if is_en else "ko"},
-        timeout=120,
+        timeout=hms_client.DEFAULT_TIMEOUT,
     )
     if not isinstance(data, dict) or not data.get("answer"):
         raise HTTPException(
@@ -118,11 +125,87 @@ def persist_hms_verifications(
     return verifications
 
 
-def hms_verification_output(citation_check: dict | None) -> list[dict]:
-    if not isinstance(citation_check, dict):
+def _to_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _source_trust_score(source: dict[str, Any]) -> int:
+    grade = str(source.get("trust_grade") or source.get("grade") or "").strip().upper()
+    if grade:
+        return SOURCE_TRUST_SCORES.get(grade[:1], 75)
+    if source.get("source_type") in {"statute", "case", "interpretation", "decision", "guideline"}:
+        return 80
+    return 75
+
+
+def _source_backed_verification_output(sources: list[dict] | None) -> list[dict]:
+    source_items = [source for source in (sources or []) if isinstance(source, dict)]
+    if not source_items:
         return []
+
+    score = round(sum(_source_trust_score(source) for source in source_items) / len(source_items))
+    status = "CONFIRMED" if score >= 80 else "WARNING"
+    return [
+        {
+            "raw": "retrieved_sources",
+            "exists": True,
+            "clause_accurate": True,
+            "valid_as_of": True,
+            "verified": status == "CONFIRMED",
+            "trust_score": score,
+            "status": status,
+            "note": "Source-backed score from retrieved evidence",
+        }
+    ]
+
+
+def hms_verification_output(
+    citation_check: dict | None,
+    sources: list[dict] | None = None,
+) -> list[dict]:
+    if not isinstance(citation_check, dict):
+        return _source_backed_verification_output(sources)
     output = citation_check.get("output", [])
-    return output if isinstance(output, list) else []
+    if isinstance(output, list) and output:
+        return output
+
+    summary = citation_check.get("summary")
+    if not isinstance(summary, dict):
+        return []
+
+    score = summary.get("avg_score")
+    if score is None:
+        score = summary.get("min_score")
+    total = _to_int(summary.get("total"))
+    if total <= 0:
+        return _source_backed_verification_output(sources)
+    if score is None:
+        return _source_backed_verification_output(sources)
+
+    failed = _to_int(summary.get("failed"))
+    verified = _to_int(summary.get("verified"))
+    if failed > 0:
+        status = "ERROR"
+    elif total > 0 and verified == total:
+        status = "CONFIRMED"
+    else:
+        status = "WARNING"
+
+    return [
+        {
+            "raw": "citation_check.summary",
+            "exists": total > 0,
+            "clause_accurate": None,
+            "valid_as_of": None,
+            "verified": status == "CONFIRMED",
+            "trust_score": score,
+            "status": status,
+            "note": "Citation summary score from HMS",
+        }
+    ]
 
 
 def create_ai_answer(
@@ -179,7 +262,7 @@ def create_ai_answer(
             db,
             ai_chat.chat_id,
             current_user.user_id,
-            hms_verification_output(hms_response.get("citation_check")),
+            hms_verification_output(hms_response.get("citation_check"), sources),
         )
 
         db.commit()

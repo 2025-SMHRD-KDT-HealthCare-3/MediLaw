@@ -304,7 +304,7 @@ export default function AdReview() {
 
       {/* 오른쪽: 검토 입력/결과 */}
       <div className="flex-1 overflow-y-auto p-8">
-        <div className="mx-auto max-w-2xl">
+        <div className="mx-auto max-w-5xl">
           <button
             onClick={() => setSidebarOpen((v) => !v)}
             title={t('common.toggleSidebar')}
@@ -386,7 +386,6 @@ export default function AdReview() {
           <LoadingWait
             title={t('ad.reviewingTitle')}
             hint={t('ad.reviewingHint')}
-            expected={t('ad.reviewExpected')}
             steps={[t('ad.reviewStep1'), t('ad.reviewStep2'), t('ad.reviewStep3')]}
           />
         )}
@@ -502,10 +501,11 @@ export default function AdReview() {
                 {t('ad.noItems')}
               </div>
             ) : (
-              result.checklist.map((item) => {
+              <div className="grid gap-4 xl:grid-cols-2">
+              {result.checklist.map((item) => {
                 const s = ITEM_STYLE[item.status ?? ''] ?? ITEM_STYLE.na
                 return (
-                  <div key={item.id} className="rounded-xl border border-gray-200 bg-white p-6">
+                  <div key={item.id} className="rounded-xl border border-gray-200 bg-white p-5">
                     <div className="mb-3 flex items-center justify-end">
                       <span
                         className="shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium"
@@ -550,7 +550,8 @@ export default function AdReview() {
                     )}
                   </div>
                 )
-              })
+              })}
+              </div>
             ))}
               </>
             )}

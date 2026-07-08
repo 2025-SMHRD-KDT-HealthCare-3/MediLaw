@@ -44,9 +44,8 @@ export default function Home() {
           >
             {t('home.badge')}
           </div>
-          <h1 style={{ fontSize: 40, fontWeight: 800, lineHeight: 1.25, margin: 0 }}>
-            {t('home.heroLine1')} <span style={{ color: '#22C9DB' }}>{t('home.heroHighlight')}</span>{t('home.heroLine2')}<br />
-            {t('home.heroLine3')}
+          <h1 style={{ fontSize: 40, fontWeight: 800, lineHeight: 1.25, margin: 0, whiteSpace: 'nowrap' }}>
+            {t('home.heroLine1')} <span style={{ color: '#22C9DB' }}>{t('home.heroHighlight')}</span>{t('home.heroLine2')} {t('home.heroLine3')}
           </h1>
           <p
             style={{

@@ -10,11 +10,11 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TIMEOUT = 120
+DEFAULT_TIMEOUT = 900
 # PDF 문서 검토는 위반 문구가 많으면 세그먼트마다 LLM을 직렬 호출해 오래 걸린다(실측 위반 배너 ~249s).
-# 180s면 정상 완료 전에 잘려 "HMS server response timed out"이 떴다 → 300s로 상향.
+# 5분에 정상 완료 전에 잘리는 사례가 있어 15분으로 상향.
 # (근본 단축은 HMS 쪽 세그먼트 병렬화 몫. node 프록시 타임아웃은 이 값보다 커야 함.)
-DOCUMENT_TIMEOUT = 300
+DOCUMENT_TIMEOUT = 900
 ERROR_BODY_LOG_LIMIT = 500
 
 
