@@ -171,8 +171,12 @@ def _build(req: ChatRequest):
             [{"role": t.role, "content": t.content} for t in req.history[-MAX_HISTORY:]],
             req.question,
         )
+    elif lang == "en":
+        search_q = llm.translate(req.question, "ko")  # EN은 번역이 이미 용어를 정규화
     else:
-        search_q = llm.translate(req.question, "ko") if lang == "en" else req.question
+        # 단일턴 한국어: 구어체 질문을 법령 용어로 보강한 '검색 전용' 질의로 재작성.
+        # 답변 생성 프롬프트(아래 user)는 여전히 원 질문(req.question)을 사용한다.
+        search_q = llm.rewrite_query_single(req.question)
 
     hits, method = hybrid_search(
         search_q, req.source_types, top_k=req.top_k, as_of=req.as_of
