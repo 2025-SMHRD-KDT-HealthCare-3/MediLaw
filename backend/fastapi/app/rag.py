@@ -5,6 +5,7 @@
 - case 히트: 판례 단위
 - interpretation(해석례)·decision(결정문)·guideline(가이드라인): documents 테이블에 적재되어 검색됨
 """
+import os
 import re
 import threading
 from collections import OrderedDict
@@ -69,11 +70,104 @@ _FTS_SYNONYMS: dict[str, str] = {
     "가명처리": "가명정보 처리",                      # 개보법 제28조의2(가명정보의 처리 등)
 }
 
+# ---------- 법제처 용어관계 term_map (scripts/ingest_terms.py 수집) ----------
+# 하드코딩 _FTS_SYNONYMS 를 "보충"하는 대규모 일상어→법령용어 사전. 코퍼스 조문에
+# 연계된 법령용어만 역수집한 것이라 도메인 밖 노이즈가 적다. FTS 채널 전용(위와 동일 근거).
+_TERM_MAP_MAX_ADD = 6                 # 질의당 덧붙일 법령용어 상한(FTS 질의 비대화 방지)
+# 채택 관계·우선순위(동의어 → 연관어 → 상·하위어 순으로 슬롯 배분).
+# 확장은 "코퍼스 조문에 없는 일상어"(진짜 어휘 불일치: 스팸·해킹·CCTV·3차병원)에만 적용 —
+# 질의 단어가 이미 조문에 있으면 FTS 직접 매칭이 되므로 확장이 불필요하고, 오히려
+# 동음이의 동의어(의사→의견)·준-무관 연관어(진료기록→진료기록전송지원시스템)가
+# BM25 를 희석해 골든/블라인드 순위가 회귀함을 실측. 조문에 없는 단어는 어차피
+# FTS 기여가 0이라, 방향이 다소 어긋난 관계(상·하위어: 해킹→침해사고)라도 득이 크다.
+_TERM_MAP_RELATIONS = ("동의어", "연관어", "상위어", "하위어")
+
+
+@lru_cache(maxsize=1)
+def _term_map() -> tuple[dict[str, list[str]], tuple[str, ...]]:
+    """term_map 테이블 → ({일상용어(소문자): 우선순위 정렬된 법령용어들}, 길이 내림차순 키).
+
+    - 관계는 _TERM_MAP_RELATIONS 만 채택(상위어·하위어 등은 노이즈로 배제), 1글자 용어 제외.
+    - 테이블 없음/빈 테이블/환경변수 TERM_MAP_OFF=1(효과 측정용)이면 빈 맵
+      → 기존 하드코딩 _FTS_SYNONYMS 만으로 동작(graceful fallback).
+    """
+    empty: tuple[dict[str, list[str]], tuple[str, ...]] = ({}, ())
+    if os.environ.get("TERM_MAP_OFF"):
+        return empty
+    try:
+        rows = db().execute(
+            "SELECT daily_term, legal_term, relation FROM term_map"
+        ).fetchall()
+    except Exception:
+        return empty  # 테이블 없음 등 → 기존 동작 유지
+    prio = {rel: i for i, rel in enumerate(_TERM_MAP_RELATIONS)}
+
+    @lru_cache(maxsize=None)
+    def _in_corpus(term: str) -> bool:
+        """일상어가 조문 텍스트에 (접두 토큰으로라도) 이미 존재하는지 FTS 프로브.
+        존재하면 FTS 직접 매칭이 되므로 확장 대상에서 제외한다."""
+        try:
+            return db().execute(
+                "SELECT 1 FROM articles_fts WHERE articles_fts MATCH ? LIMIT 1",
+                (f'"{term}"*',),
+            ).fetchone() is not None
+        except Exception:
+            return True  # 프로브 실패 시 보수적으로 '있음' 취급(확장 억제)
+
+    grouped: dict[str, list[tuple[int, str]]] = {}
+    for r in rows:
+        daily, legal, rel = r["daily_term"], r["legal_term"], r["relation"]
+        if rel not in prio or len(daily) < 2 or len(legal) < 2 or daily == legal:
+            continue
+        # 숫자뿐인 일상용어('112'→신고 등)는 질의 속 아무 숫자에나 부분일치해 오발화 → 제외.
+        if not re.search(r"[가-힣a-z]", daily):
+            continue
+        # 코퍼스에 없는 일상어(진짜 어휘 불일치)만 확장 대상으로 채택.
+        if _in_corpus(daily):
+            continue
+        grouped.setdefault(daily, []).append((prio[rel], legal))
+    mapping: dict[str, list[str]] = {}
+    for daily, pairs in grouped.items():
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for _, legal in sorted(pairs):  # 동의어 → 연관어 순
+            if legal not in seen:
+                seen.add(legal)
+                ordered.append(legal)
+        mapping[daily] = ordered
+    # 긴(=더 구체적인) 일상용어가 확장 슬롯을 먼저 가져가도록 길이 내림차순 키 목록을 함께 캐시.
+    keys = tuple(sorted(mapping, key=len, reverse=True))
+    return mapping, keys
+
 
 def _expand_query_for_fts(query: str) -> str:
     """질의에 포함된 일상어 키워드에 대응하는 법령 표제어를 덧붙인 FTS용 질의 반환."""
     q_lower = query.lower()
     extra = [terms for key, terms in _FTS_SYNONYMS.items() if key in q_lower]
+    # term_map 보충: 질의에 등장한 일상용어의 법령용어를 최대 _TERM_MAP_MAX_ADD 개 추가.
+    # 하드코딩 확장으로 이미 질의에 들어간 토큰·질의 원문에 있는 용어는 중복 추가하지 않는다.
+    mapping, keys = _term_map()
+    if mapping:
+        present = q_lower + " " + " ".join(extra).lower()
+        added = 0
+        matched: list[str] = []  # 이미 매칭된(더 긴) 일상용어 — 그 부분문자열 키는 중복 발화로 보고 스킵
+        for daily in keys:  # 길이 긴(구체적) 일상용어부터
+            if added >= _TERM_MAP_MAX_ADD:
+                break
+            if daily not in q_lower:
+                continue
+            # 예: '진료기록부'가 이미 매칭됐으면 그 안의 '진료'는 별도 매칭으로 치지 않는다(노이즈 가드).
+            if any(daily in m for m in matched):
+                continue
+            matched.append(daily)
+            for legal in mapping[daily]:
+                if added >= _TERM_MAP_MAX_ADD:
+                    break
+                if legal in present:
+                    continue
+                extra.append(legal)
+                present += " " + legal
+                added += 1
     return f"{query} {' '.join(extra)}" if extra else query
 
 
