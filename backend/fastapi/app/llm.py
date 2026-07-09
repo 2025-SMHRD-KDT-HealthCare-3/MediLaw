@@ -1,5 +1,6 @@
 """OpenAI 생성 LLM 래퍼 (gpt-5.5). 챗봇·PDF 에디터 공용."""
 import json
+import re
 import threading
 from collections.abc import Iterator
 
@@ -129,14 +130,64 @@ _SINGLE_REWRITE_SYSTEM = (
     "규칙:\n"
     "1. 원 질문의 핵심 명사·키워드는 빠짐없이 그대로 유지하고, 그 뒤에 대응하는 법령 용어를 "
     "덧붙여 '보강'만 하라. 원 단어를 다른 말로 바꾸거나 새 주제를 지어내지 마라.\n"
-    "2. 일상 표현에는 대응하는 법령 용어를 덧붙여라. 예: '면허 없이 시술' → 무면허 의료행위, "
+    "2. 위 4대 법령(의료법·개인정보 보호법·생명윤리 및 안전에 관한 법률(생명윤리법)·"
+    "정보통신망 이용촉진 및 정보보호 등에 관한 법률(정보통신망법)) 중 질문과 가장 관련된 "
+    "'하나'의 이름만 덧붙여라(질문에 없어도 됨). 법령명 여러 개를 나열해 질의를 희석하지 마라. "
+    "그 밖의 법령명·법률명·판례 사건명은 사용자 질문에 등장하지 않는 한 새로 추가하지 마라. "
+    "질문이 '다른 법률이 있는지'를 물어도 특정 법률명을 답하듯 질의에 넣지 마라 — "
+    "4대 법령 외에는 일반 법령 용어(규칙 3)로만 보강하라.\n"
+    "3. 일상 표현에는 대응하는 법령 용어를 덧붙여라. 예: '면허 없이 시술' → 무면허 의료행위, "
     "'폐업하는 병원의 진료기록' → 진료기록부 이관, '해킹당했다' → 침해사고, "
     "'광고 문자·스팸' → 영리목적 광고성 정보 전송, 'CCTV' → 고정형 영상정보처리기기, "
     "'환자 정보 유출' → 개인정보 유출 통지·신고.\n"
-    "3. 처벌·벌금·형량·처벌 수위를 묻는 질문이면 끝에 '벌칙 처벌 벌금 형사처벌'을 덧붙여라.\n"
-    "4. 이미 법령 용어로 쓰인 질문은 거의 그대로 두고 필요한 용어만 최소로 덧붙여라.\n"
-    "5. 출력은 짧은 검색 질의 한 줄만. 설명·따옴표·마크다운 금지."
+    "4. 처벌·벌금·형량·처벌 수위를 묻는 질문이면 끝에 '벌칙 처벌 벌금 형사처벌'을 덧붙여라.\n"
+    "5. 이미 법령 용어로 쓰인 질문은 거의 그대로 두고 필요한 용어만 최소로 덧붙여라.\n"
+    "6. 출력은 짧은 검색 질의 한 줄만. 설명·따옴표·마크다운 금지."
 )
+
+
+# 코퍼스 4대 법령의 정식명·약칭 — 재작성이 이들을 덧붙이는 것은 의도된 보강(966a5f0)이므로
+# 가드가 절대 제거하지 않는다(공백 무시 비교).
+_CORPUS_LAW_NAMES = (
+    "의료법", "개인정보 보호법", "개인정보보호법",
+    "생명윤리 및 안전에 관한 법률", "생명윤리법",
+    "정보통신망 이용촉진 및 정보보호 등에 관한 법률", "정보통신망법",
+)
+
+# '확실한' 법령명 패턴만 매칭(보수적 가드) — (1) 「…에 관한 (특별조치)법(률)」형 정식명,
+# (2) 특별조치법·단속법·특례법·처벌법·특별법처럼 법령명에서만 쓰이는 복합 접미어.
+# 단독 '…법' 일반형(방법·수법·불법 등 오탐 위험)은 건드리지 않는다.
+# 선행 단어 수식자는 lazy(*?) — 매치를 최소로 잡아 앞쪽 질의 단어를 과하게 삼키지 않는다.
+_FOREIGN_LAW_RE = re.compile(
+    r"[가-힣]+(?:\s[가-힣]+)*?\s?에\s?관한\s?(?:특별조치법|특별법|법률|법)"
+    r"|[가-힣]{2,}(?:특별조치법|단속법|특례법|처벌법|특별법)"
+)
+
+
+def _strip_foreign_law_names(question: str, rewritten: str) -> str:
+    """재작성 질의에서 원 질문에 없고 코퍼스 4대 법령도 아닌 법령명을 제거(결정론 가드).
+
+    재작성 LLM이 질문에 없는 타 법령명(예: 보건범죄 단속에 관한 특별조치법)을 주입하면
+    판례 사건명과 문자 일치해 검색 top-k를 독식하는 문제를 막는다.
+    코퍼스 법령명을 덧붙이는 보강(966a5f0)은 절대 제거하지 않는다.
+    """
+    q_norm = question.replace(" ", "")
+
+    def _keep_or_drop(m: "re.Match[str]") -> str:
+        name = m.group(0)
+        norm = name.replace(" ", "")
+        if norm in q_norm:  # 사용자가 직접 말한 법령명은 유지
+            return name
+        for corpus in _CORPUS_LAW_NAMES:  # 코퍼스 법령명으로 끝나는 매치는 통째 유지
+            if norm.endswith(corpus.replace(" ", "")):
+                return name
+        # 다단어 매치에 딸려 들어온 '원 질문 단어'는 보존하고, 질문에 없는
+        # 법령명 몸통(보건범죄·단속에·관한·특별조치법 등)만 제거한다.
+        return " ".join(w for w in name.split() if w in question)
+
+    cleaned = _FOREIGN_LAW_RE.sub(_keep_or_drop, rewritten)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ·,")
+    return cleaned or rewritten
 
 
 def rewrite_query_single(question: str) -> str:
@@ -153,9 +204,14 @@ def rewrite_query_single(question: str) -> str:
                 {"role": "system", "content": _SINGLE_REWRITE_SYSTEM},
                 {"role": "user", "content": question},
             ],
+            # 재작성 결정성 확보(best-effort): gpt-5.5는 temperature=0을 400으로 거부
+            # (기본값 1만 허용, 실측)하지만 seed는 수용한다. 동일 질문 → 동일 질의
+            # 경향을 높여 검색 결과 재현성을 개선한다(완전 보장은 아님).
+            seed=42,
             **_GEN_OPTS,
         )
-        return (resp.choices[0].message.content or "").strip() or question
+        out = (resp.choices[0].message.content or "").strip()
+        return _strip_foreign_law_names(question, out) if out else question
     except Exception:  # LLM 실패 전반(키 미설정·런타임 에러) → 원문 반환(검색 degrade 보장)
         return question
 

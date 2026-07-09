@@ -100,13 +100,26 @@ _LAW_LABEL_RE = re.compile(
     r"(제\s*\d+\s*조(?:\s*의\s*\d+)?(?:\s*제\s*\d+\s*항)?)"
 )
 
+# 라벨 접두 복원: "보건범죄 단속에 관한 특별조치법"처럼 띄어쓴 긴 법령명은 위 라벨
+# 정규식(공백 불허)이 마지막 토큰("특별조치법")만 잡아 조각 라벨이 된다. 매치 직전이
+# "…에/의 관한(대한·위한) " 패턴이면 그 앞 명사 몇 단어까지 법령명으로 되살린다.
+# 조사(은/는/이/가…)로 끝나는 단어는 문장조각으로 보고 접두에 넣지 않는다(과캡처 방지).
+_LAW_LABEL_PREFIX_RE = re.compile(
+    r"((?:[가-힣]{2,20}(?<![은는이가을를의도])\s+){0,3}"
+    r"[가-힣]{1,20}[에의]\s*(?:관한|대한|위한)\s*)$"
+)
+
 
 def clean_law_label(raw: str) -> str:
     m = _LAW_LABEL_RE.search(raw or "")
     if not m:
         return (raw or "").strip()
     article = re.sub(r"\s+", "", m.group(2))
-    return f"{m.group(1)} {article}"
+    name = m.group(1)
+    pre = _LAW_LABEL_PREFIX_RE.search(raw[: m.start(1)])
+    if pre:
+        name = re.sub(r"\s+", " ", (pre.group(1) + name).strip())
+    return f"{name} {article}"
 
 
 # ── 내용 일치(content faithfulness) 검증 — 별도 레이어 ──────────────────────
@@ -301,6 +314,68 @@ def _apply_content_checks(items: list[tuple[VerifyResult, str | None, str | None
         return  # numpy 부재 등 — 단건(_content_similarity)과 동일하게 graceful skip
 
 
+# ── 코퍼스 밖 인용의 2차 대조(sources 원문 대조) ────────────────────────────
+# 코퍼스(4개 법) 밖 법령이라도 이 답변에 검색된 판례 스니펫 원문에 그 법령명이
+# 그대로 등장하면 '근거 없는 서술'이 아니다 — 경고를 완화할 수 있게 플래그를 단다.
+# 매칭은 공백·가운뎃점을 지운 뒤 부분문자열 비교(띄어쓰기 변형 흡수). 답변이 앞
+# 문장조각을 달고 캡처되는 것을 감안해 후보명을 단어 접미 단위로 줄여가며 시도하고,
+# "…에 관한 특별조치법/법률" ↔ "…법" 약칭 변형도 양방향으로 흡수한다.
+
+# 익명 지칭("동법 제25조") 또는 이름 없는 조각("특별조치법"만 단독) — 매칭 후보에서
+# 제외하고, 경고줄 라벨에서도 별도 항목으로 잡히지 않게 걸러낸다(표시단 노이즈 제거).
+ANAPHORIC_OR_FRAGMENT_LAW_NAMES = frozenset(
+    ["동법", "같은법", "해당법", "그법", "이법", "본법", "위법", "동법률", "같은법률",
+     "특별조치법", "특례법"]
+) | _GENERIC_LAW_TOKENS
+
+_LAW_ABBREV_SUBS = (("에관한특별조치법", "법"), ("에관한법률", "법"))
+
+
+def _norm_law(s: str) -> str:
+    """법령명 비교용 정규화 — 공백·가운뎃점 제거(띄어쓰기 변형 흡수)."""
+    return re.sub(r"[\s·]", "", s or "")
+
+
+def _law_name_candidates(law_name: str) -> list[str]:
+    """캡처된 법령명(앞 문장조각 포함 가능)에서 대조 후보들을 만든다.
+
+    뒤에서부터 k개 단어를 합친 접미들("위반은 보건범죄 단속에 관한 특별조치법" →
+    전체, "보건범죄단속에관한특별조치법", …) + 각 후보의 약칭 변형. 접미어 조각
+    ("특별조치법"·"법")·익명 지칭만 남은 후보는 제외한다.
+    """
+    words = (law_name or "").split()
+    out: list[str] = []
+    for k in range(len(words), 0, -1):
+        cand = _norm_law("".join(words[-k:]))
+        if len(cand) < 2 or cand in ANAPHORIC_OR_FRAGMENT_LAW_NAMES:
+            continue
+        if cand not in out:
+            out.append(cand)
+        for pat, rep in _LAW_ABBREV_SUBS:
+            abbr = cand.replace(pat, rep)
+            if abbr != cand and len(abbr) >= 3 and abbr not in out:
+                out.append(abbr)
+    return out
+
+
+def _statute_in_sources(law_name: str, source_texts: list[str]) -> bool:
+    """해당 법령명이 이 답변의 근거(sources) 원문에 실제 등장하는지 대조."""
+    cands = _law_name_candidates(law_name)
+    if not cands:
+        return False
+    for text in source_texts:
+        hay = _norm_law(text)
+        if not hay:
+            continue
+        hay_abbr = hay
+        for pat, rep in _LAW_ABBREV_SUBS:  # 원문이 정식 명칭이어도 약칭 인용과 맞도록
+            hay_abbr = hay_abbr.replace(pat, rep)
+        for cand in cands:
+            if cand in hay or cand in hay_abbr:
+                return True
+    return False
+
+
 def _match_statute(law_name: str):
     """후보 법령명에 포함된 실제 법령 중 가장 긴 것을 반환."""
     return db().execute(
@@ -380,17 +455,27 @@ def _cross_check_revisions(s, as_of, score, status, notes) -> tuple[int, str]:
 
 def verify_statute(law_name: str, article_no: str | None, raw: str, as_of: str | None,
                    paragraph_no: int | None = None, claim: str | None = None,
-                   content_batch: list | None = None) -> VerifyResult:
+                   content_batch: list | None = None,
+                   source_texts: list[str] | None = None) -> VerifyResult:
     s = _match_statute(law_name)
     if not s:
         # DB에 없는 법령: '환각'으로 단정(오류/0점)하지 않는다 — 실재하나 코퍼스(4개 법)
         # 밖일 수 있어 구조적으로 검증이 불가능하다. '주의'로 표시해, 코퍼스 밖 인용 한 건이
         # 전체 답변 신뢰도를 0으로 끌어내리는 것을 막는다(코퍼스 밖 인용은 경고줄로 별도 고지).
+        # 2차 대조: 이 답변의 근거(sources) 원문에 그 법령명이 실제 등장하면 근거 있는
+        # 서술이므로 seen_in_sources=True 로 구분한다(경고 완화용). status/점수는 그대로
+        # '주의'/50 — 법령 원문 검증이 된 것은 아니므로 '확인' 등급으로 올리지 않는다.
         clean = clean_law_label(raw)
+        seen_src = _statute_in_sources(law_name, source_texts) if source_texts else None
+        if seen_src:
+            note = (f"'{clean}'은(는) 코퍼스(4개 법) 밖이지만 인용된 판례 원문에서 언급이 "
+                    "확인됨(법령 원문 검증은 되지 않음)")
+        else:
+            note = f"'{clean}'은(는) 확인된 코퍼스(4개 법) 밖이라 검증 불가"
         return VerifyResult(
             raw=raw, type="statute", exists=False, verified=False,
             trust_score=50, status="주의", matched_label=clean,
-            note=f"'{clean}'은(는) 확인된 코퍼스(4개 법) 밖이라 검증 불가",
+            seen_in_sources=seen_src, note=note,
         )
 
     clause_accurate = None
@@ -549,13 +634,16 @@ def _claim_sentence(text: str, start: int, end: int) -> str:
     return text[left:right].strip()
 
 
-def extract_and_verify(text: str, as_of: str | None) -> list[VerifyResult]:
+def extract_and_verify(text: str, as_of: str | None,
+                       source_texts: list[str] | None = None) -> list[VerifyResult]:
     """LLM 답변 원문에서 인용을 추출해 전부 검증.
 
     각 인용 매치마다 그것을 포함하는 '주장 문장'을 함께 넘겨 내용 일치 검증에 쓴다
     (CONTENT_CHECK ON일 때만 사용; OFF면 무시되어 기존 동작 불변).
     내용 일치 검증은 인용별로 임베딩을 호출하지 않고, 전 인용을 모아 마지막에
     임베딩 1회 배치(_apply_content_checks)로 처리한다(지연 단축).
+    source_texts(이 답변에 검색된 근거 스니펫 원문들)를 주면 코퍼스 밖 법령 인용을
+    근거 원문과 2차 대조해 seen_in_sources 플래그를 단다(미지정 시 기존 동작 불변).
     """
     results: list[VerifyResult] = []
     seen: set[str] = set()
@@ -577,7 +665,7 @@ def extract_and_verify(text: str, as_of: str | None) -> list[VerifyResult]:
         claim = _claim_sentence(text, m.start(), m.end())
         results.append(
             verify_statute(law_name, article_no, m.group(0).strip(), as_of, paragraph_no, claim,
-                           content_batch=pending_content))
+                           content_batch=pending_content, source_texts=source_texts))
 
     for m in _CASE_RE.finditer(text):
         case_no = re.sub(r"\s", "", m.group(1))

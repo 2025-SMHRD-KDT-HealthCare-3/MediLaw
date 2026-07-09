@@ -118,6 +118,10 @@ class VerifyResult(BaseModel):
         None, description="인용 주장과 실제 본문의 의미 일치 여부. None=미검증(플래그 OFF·키없음·문맥부족)")
     content_score: Optional[float] = Field(
         None, description="본문 대비 의미 유사도 0~1, None=미검증")
+    seen_in_sources: Optional[bool] = Field(
+        None, description="코퍼스 밖 인용의 2차 대조 — 이 답변에 실제 검색된 근거(판례 등) "
+        "원문에 해당 법령명이 등장하는지. True=근거 원문에서 언급 확인(법령 원문 검증은 아님), "
+        "False=근거에도 없음, None=미대조(코퍼스 내 인용이거나 sources 미제공)")
 
 
 class VerifySummary(BaseModel):

@@ -14,7 +14,12 @@ from fastapi.responses import StreamingResponse
 
 from app import domain_router, llm
 from app.auth import require_api_key
-from app.citations import clean_law_label, extract_and_verify, summarize
+from app.citations import (
+    ANAPHORIC_OR_FRAGMENT_LAW_NAMES,
+    clean_law_label,
+    extract_and_verify,
+    summarize,
+)
 from app.english import detect_lang, english_article
 from app.rag import hybrid_search
 from app.schemas import (
@@ -217,9 +222,25 @@ def _build(req: ChatRequest):
     return messages, sources, method, lang, search_q
 
 
-def _citation_check(answer: str, as_of) -> VerifyResponse:
-    results = extract_and_verify(answer, as_of)
+def _citation_check(answer: str, as_of, source_texts: list[str] | None = None) -> VerifyResponse:
+    results = extract_and_verify(answer, as_of, source_texts=source_texts)
     return VerifyResponse(output=results, summary=summarize(results), as_of=as_of)
+
+
+def _source_texts(sources: list[ChatSource]) -> list[str]:
+    """코퍼스 밖 인용 2차 대조용 — 이 답변에 검색된 근거 스니펫 원문들."""
+    return [t for s in sources for t in (s.snippet, s.snippet_en) if t]
+
+
+# 경고줄 라벨 노이즈 필터: 라벨의 법령명부가 익명 지칭("동법")·이름 없는 접미어 조각
+# ("특별조치법" 단독)뿐이면 별도 항목으로 표시하지 않는다. 검증 결과(cc.output)에는
+# 그대로 남으므로 표시단 필터일 뿐 검증 동작은 바꾸지 않는다.
+_LABEL_ARTICLE_TAIL_RE = re.compile(r"\s*제\s*\d+\s*조(?:의\s*\d+)?(?:\s*제\s*\d+\s*항)?\s*$")
+
+
+def _label_is_noise(label: str) -> bool:
+    name = re.sub(r"\s", "", _LABEL_ARTICLE_TAIL_RE.sub("", label))
+    return name in ANAPHORIC_OR_FRAGMENT_LAW_NAMES
 
 
 def _offcorpus_note(cc: VerifyResponse, lang: str) -> str:
@@ -228,24 +249,44 @@ def _offcorpus_note(cc: VerifyResponse, lang: str) -> str:
     LLM이 근거 밖 법령·판례를 흘려 쓰면 Citation Firewall이 exists=False로 잡는다.
     본문은 그대로 두고, 검증 안 된 인용을 끝에 명시해 사용자가 오인하지 않게 한다.
     라벨은 citations.clean_law_label 로 앞 문장조각을 떼어 '법령명 제N조'만 보인다.
+    2차 대조(seen_in_sources)로 인용된 판례 원문에서 언급이 확인된 법령은 완화된
+    안내(ℹ️)로, 근거에도 없는 인용은 기존 경고(⚠️)로 나눠 표시한다.
     """
     seen: set[str] = set()
-    labels: list[str] = []
+    labels: list[str] = []       # 근거에도 없음 → 기존 경고 유지
+    soft_labels: list[str] = []  # 판례 원문에서 언급 확인 → 완화 안내
     for r in cc.output:
-        if not r.exists and (r.raw or "").strip():
-            label = clean_law_label(r.raw)
-            if label and label not in seen:
-                seen.add(label)
-                labels.append(label)
-    if not labels:
-        return ""
-    joined = ", ".join(labels)
-    if lang == "en":
-        return ("\n\n⚠️ The following citations are outside the verified corpus "
+        if r.exists or not (r.raw or "").strip():
+            continue
+        label = clean_law_label(r.raw)
+        if not label or label in seen or _label_is_noise(label):
+            continue
+        seen.add(label)
+        (soft_labels if r.seen_in_sources else labels).append(label)
+    parts: list[str] = []
+    if labels:
+        joined = ", ".join(labels)
+        if lang == "en":
+            parts.append(
+                "\n\n⚠️ The following citations are outside the verified corpus "
                 "(Medical Service Act, PIPA, Bioethics Act, Network Act) and could not be "
                 f"confirmed — treat as reference only: {joined}")
-    return ("\n\n⚠️ 다음 인용은 확인된 코퍼스(의료법·개인정보보호법·생명윤리법·정보통신망법) 밖이라 "
-            f"검증되지 않았습니다 — 참고용으로만 보세요: {joined}")
+        else:
+            parts.append(
+                "\n\n⚠️ 다음 인용은 확인된 코퍼스(의료법·개인정보보호법·생명윤리법·정보통신망법) 밖이라 "
+                f"검증되지 않았습니다 — 참고용으로만 보세요: {joined}")
+    if soft_labels:
+        joined = ", ".join(soft_labels)
+        if lang == "en":
+            parts.append(
+                "\n\nℹ️ The following statutes are outside the verified corpus (4 acts), but "
+                "they are mentioned in the cited case-law text retrieved for this answer. The "
+                f"statute text itself was not verified: {joined}")
+        else:
+            parts.append(
+                "\n\nℹ️ 다음 법령은 코퍼스(4개 법령) 밖이지만, 인용된 판례 원문에서 언급이 "
+                f"확인되었습니다. 법령 원문 검증은 되지 않았습니다: {joined}")
+    return "".join(parts)
 
 
 def _chat_impl(req: ChatRequest):
@@ -281,7 +322,7 @@ def _chat_impl(req: ChatRequest):
         raise HTTPException(503, str(e))
     if decision["needs_clarification"]:  # Tier 2 모호 → 답변 끝에 되묻기 한 줄
         answer += _CLARIFY_EN if lang == "en" else _CLARIFY
-    cc = _citation_check(answer, req.as_of)  # 경고 덧붙이기 전 원문 기준으로 검증
+    cc = _citation_check(answer, req.as_of, _source_texts(sources))  # 경고 덧붙이기 전 원문 기준으로 검증
     answer += _offcorpus_note(cc, lang)      # 겹2-A: 코퍼스 밖 인용 비파괴 경고
     return ChatResponse(
         answer=answer, answer_segments=segment_answer(answer, sources),
@@ -368,7 +409,9 @@ def _chat_stream_impl(req: ChatRequest):
             yield _sse({"type": "token", "text": clarify})
             parts.append(clarify)  # done의 answer_segments/citation_check에도 포함
         answer = "".join(parts)
-        yield _sse({"type": "done", "citation_check": _citation_check(answer, req.as_of).model_dump(),
+        yield _sse({"type": "done",
+                    "citation_check": _citation_check(answer, req.as_of,
+                                                      _source_texts(sources)).model_dump(),
                     "answer_segments": [s.model_dump() for s in segment_answer(answer, sources)]})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
